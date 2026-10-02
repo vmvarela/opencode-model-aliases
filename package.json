@@ -1,7 +1,7 @@
 {
   "name": "opencode-floating-models",
   "version": "0.1.0",
-  "description": "OpenCode plugin: resolves one floating model per configured alias from a source list, with pure normalization and latest-strategy selection.",
+  "description": "OpenCode plugin: materializes floating model aliases into the model catalog with strict/tolerant policies and latest-strategy selection.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

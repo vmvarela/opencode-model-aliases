@@ -1,4 +1,4 @@
-import type { Candidate, Checker, NormalizedAlias } from "./config.js";
+import type { Candidate, NormalizedAlias } from "./config.js";
 import { failure, type ResolveFailure } from "./errors.js";
 
 export interface Stage {
@@ -90,5 +90,3 @@ export function resolveLatest<T extends Candidate>(
   }
   return { ok: true, model: winner, stages: [...stages, { name: "selection", accepted: 1 }] };
 }
-
-export type { Checker };

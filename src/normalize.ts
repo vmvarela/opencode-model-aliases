@@ -183,12 +183,14 @@ function normalizeAlias(key: string, value: unknown): NormalizedAlias | ResolveF
   return {
     key,
     provider: head.provider,
+    modelID: head.modelID,
     match: includes.raw,
     exclude: excludes.raw,
     includes: includes.checkers,
     excludes: excludes.checkers,
     statuses,
     name: name === undefined ? key : name,
+    nameExplicit: name !== undefined,
   };
 }
 

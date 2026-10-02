@@ -52,6 +52,8 @@ export interface NormalizedAlias {
   readonly key: string;
   /** Proveedor literal de la clave. */
   readonly provider: string;
+  /** Parte modelo de la clave; puede contener `/`. */
+  readonly modelID: string;
   readonly match: readonly string[];
   readonly exclude: readonly string[];
   readonly includes: readonly Checker[];
@@ -60,6 +62,8 @@ export interface NormalizedAlias {
   readonly statuses: readonly AllowedStatus[];
   /** name configurado o, si se omite, la propia clave. */
   readonly name: string;
+  /** true solo cuando el usuario configuró `name` explícitamente. */
+  readonly nameExplicit: boolean;
 }
 
 export interface NormalizedConfig {

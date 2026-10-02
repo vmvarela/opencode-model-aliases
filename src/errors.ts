@@ -1,4 +1,4 @@
-/** Distinguishable failure kinds for Phase 2 diagnostics. */
+/** Kinds of distinguishable failure for diagnostics. */
 export type FailureKind =
   /** Options did not normalize (malformed alias, bad pattern, bad status…). */
   | "parse-error"

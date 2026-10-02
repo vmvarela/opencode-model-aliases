@@ -161,12 +161,14 @@ describe("resolveLatest", () => {
     const permissive: NormalizedAlias = {
       key: "anthropic/x",
       provider: "anthropic",
+      modelID: "x",
       match: [],
       exclude: [],
       includes: [() => true],
       excludes: [],
       statuses: ["active"],
       name: "anthropic/x",
+      nameExplicit: false,
     };
     const r = resolveLatest(
       [
@@ -186,7 +188,7 @@ describe("resolveLatest", () => {
     if (!onlyForeign.ok) expect(onlyForeign.failure.kind).toBe("no-eligible");
   });
 
-  it("expone conteos por etapa para diagnóstico en Fase 2", () => {
+  it("expone conteos por etapa para diagnóstico", () => {
     const cfg = alias({ "anthropic/x": { match: "anthropic/**" } });
     const r = resolveLatest(
       [

@@ -55,6 +55,8 @@ describe("normalizeOptions", () => {
       expect(alias.exclude).toEqual(["anthropic/claude-2*"]);
       expect(alias.statuses).toEqual(["active", "alpha"]);
       expect(alias.name).toBe("Claude");
+      expect(alias.modelID).toBe("claude");
+      expect(alias.nameExplicit).toBe(true);
       expect(alias.includes).toHaveLength(1);
       expect(alias.excludes).toHaveLength(1);
     }
@@ -257,7 +259,9 @@ describe("normalizeOptions", () => {
     expect(ok.ok).toBe(true);
     if (ok.ok) {
       expect(ok.config.aliases[0]?.name).toBe("Probe");
+      expect(ok.config.aliases[0]?.nameExplicit).toBe(true);
       expect(ok.config.aliases[1]?.name).toBe("anthropic/b");
+      expect(ok.config.aliases[1]?.nameExplicit).toBe(false);
       expect(ok.config.strict).toBe(true);
       expect(ok.config.debug).toBe(false);
     }

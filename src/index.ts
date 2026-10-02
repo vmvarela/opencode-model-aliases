@@ -12,4 +12,5 @@ export type {
 } from "./config.js";
 export { type FailureKind, failure, type ResolveFailure } from "./errors.js";
 export { normalizeOptions, type Selector, splitSelector } from "./normalize.js";
+export { default } from "./plugin.js";
 export { type ResolveResult, resolveLatest, type Stage } from "./resolve.js";
