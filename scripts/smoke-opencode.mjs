@@ -16,7 +16,7 @@
  *    PACKAGE ITSELF through the official `plugins` config entry with
  *    FILE-ONLY configuration: the plugin entry carries no `options` and the
  *    configuration comes exclusively from a
- *    `.opencode/opencode-floating-models.jsonc` file (JSONC comments and
+ *    `.opencode/opencode-model-aliases.jsonc` file (JSONC comments and
  *    trailing commas) in the temp project, exercising the plugin's own file
  *    loader.
  * 3. A separate downstream consumer plugin (temp root package, `main:
@@ -31,7 +31,7 @@
  *    exactly "pong" (never a substring of an echoed prompt or log line);
  *    every chat request to the loopback endpoint carries
  *    `body.model === "fake-large"` and the dummy test key; the consumer
- *    sentinel and the `[opencode-floating-models] [debug]` alias→winner line
+ *    sentinel and the `[opencode-model-aliases] [debug]` alias→winner line
  *    appear in stderr; no "failed to load plugin".
  *
  * Isolation: `HOME` and all XDG dirs are unique temp directories created
@@ -49,7 +49,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const PLUGIN_ID = "opencode-floating-models";
+const PLUGIN_ID = "opencode-model-aliases";
 const PROVIDER = "localfake";
 const ALIAS_KEY = "localfake/latest";
 const TARGET = "fake-large";
@@ -218,7 +218,7 @@ async function main() {
   // Temp único primero: HOME/XDG aislados existen ya para el probe de versión
   // y para todo lo demás. Todo lo posterior a la adquisición del directorio va
   // dentro de try/finally: cualquier fallo elimina exactamente este árbol.
-  const dir = await mkdtemp(path.join(os.tmpdir(), "opencode-floating-models-smoke-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "opencode-model-aliases-smoke-"));
 
   let server = null;
   const requests = [];
@@ -357,7 +357,7 @@ async function main() {
     const pluginConfigDir = path.join(project, ".opencode");
     await mkdir(pluginConfigDir, { recursive: true });
     await writeFile(
-      path.join(pluginConfigDir, "opencode-floating-models.jsonc"),
+      path.join(pluginConfigDir, "opencode-model-aliases.jsonc"),
       [
         "// Configuración del plugin (JSONC): comentarios y trailing commas admitidos.",
         "{",
@@ -499,7 +499,7 @@ async function main() {
       console.error(run.stderr.slice(-3000) || "(empty)");
       const interesting = run.stderr
         .split("\n")
-        .filter((line) => /opencode-floating-models|smoke-catalog-consumer|debug/.test(line));
+        .filter((line) => /opencode-model-aliases|smoke-catalog-consumer|debug/.test(line));
       console.error("--- plugin-relevant stderr lines ---");
       console.error(interesting.join("\n") || "(none)");
       // Lanzar en vez de exit: el finally cierra el servidor y borra el temp.

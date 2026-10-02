@@ -9,7 +9,7 @@ import { loadConfigFile } from "./config-file.js";
 import { normalizeOptions } from "./normalize.js";
 import { resolveLatest } from "./resolve.js";
 
-const PLUGIN_ID = "opencode-floating-models";
+const PLUGIN_ID = "opencode-model-aliases";
 const LOG_PREFIX = `[${PLUGIN_ID}]`;
 const FLOATING_SUFFIX = " (floating)";
 

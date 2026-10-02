@@ -200,7 +200,7 @@ afterEach(() => {
   removeTempRoot(tempRoot);
 });
 
-describe("opencode-floating-models plugin", () => {
+describe("opencode-model-aliases plugin", () => {
   it("configuración malformada falla antes de registrar el transform", async () => {
     const harness = createHarness({ options: { aliases: "x" } });
     await expect(floatingModels.setup(harness.ctx)).rejects.toThrow(/invalid configuration/);
@@ -514,7 +514,7 @@ describe("opencode-floating-models plugin", () => {
     expect(debugs).toEqual([]);
     expect(warnings).toHaveLength(2); // repetición del setup + repetición explícita
     for (const message of warnings) {
-      expect(message).toContain("[opencode-floating-models] [debug]");
+      expect(message).toContain("[opencode-model-aliases] [debug]");
       expect(message).toContain('alias "github-copilot/sonnet"');
       expect(message).toContain("github-copilot/sonnet-4-exec");
       expect(message).toContain("strategy=latest");

@@ -5,7 +5,7 @@ import { isPlainObject } from "./config.js";
 
 /** Directorio + nombre del archivo de configuración del plugin. */
 const CONFIG_DIR = ".opencode";
-const FILE_NAME = "opencode-floating-models.jsonc";
+const FILE_NAME = "opencode-model-aliases.jsonc";
 
 /** Options crudas leídas del archivo; los valores aún no están validados. */
 export interface RawFileOptions {
@@ -27,7 +27,7 @@ export type LoadConfigFileResult =
 /**
  * Busca el archivo de configuración más cercano subiendo desde
  * `startDirectory` hasta la raíz del filesystem. El primer
- * `<dir>/.opencode/opencode-floating-models.jsonc` existente gana: no se
+ * `<dir>/.opencode/opencode-model-aliases.jsonc` existente gana: no se
  * fusionan varios archivos ancestrales ni se consultan directorios globales.
  * ENOENT continúa hacia arriba; cualquier otro error de I/O (EISDIR, EACCES…)
  * falla con ruta y código, sin volcar contenido del archivo.

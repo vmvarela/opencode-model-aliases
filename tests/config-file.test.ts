@@ -131,7 +131,7 @@ describe("separate JSONC config file", () => {
     // latest por defecto: claude-b (released 2000) gana.
     expect(harness.view().get("anthropic/float")?.modelID).toBe("claude-b");
     // debug:true llega desde el archivo.
-    expect(warnings.some((w) => w.includes("[opencode-floating-models] [debug]"))).toBe(true);
+    expect(warnings.some((w) => w.includes("[opencode-model-aliases] [debug]"))).toBe(true);
 
     // strict:true del archivo: un alias sin resolver rechaza el setup.
     const strictDir = path.join(tempRoot, "strict");
@@ -320,7 +320,7 @@ describe("separate JSONC config file", () => {
   it("archivo ilegible (EISDIR) falla en vez de seguir hacia un archivo ancestral", async () => {
     const workspace = path.join(tempRoot, "workspace");
     const project = path.join(workspace, "proj");
-    mkdirSync(path.join(project, ".opencode", "opencode-floating-models.jsonc"), {
+    mkdirSync(path.join(project, ".opencode", "opencode-model-aliases.jsonc"), {
       recursive: true,
     });
     writeConfigFile(
@@ -368,7 +368,7 @@ describe("separate JSONC config file", () => {
       // Claves desconocidas no se propagan a las options crudas.
       expect(Object.keys(result.file.options).sort()).toEqual(["aliases", "strict"]);
       expect(
-        result.file.path.endsWith(path.join(".opencode", "opencode-floating-models.jsonc")),
+        result.file.path.endsWith(path.join(".opencode", "opencode-model-aliases.jsonc")),
       ).toBe(true);
     }
   });

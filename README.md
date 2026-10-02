@@ -1,4 +1,4 @@
-# opencode-floating-models
+# opencode-model-aliases
 
 An [OpenCode](https://opencode.ai) v2 plugin that materializes **floating model aliases** into
 the model catalog. Configure an alias once and the plugin picks the newest matching source
@@ -27,14 +27,14 @@ distinguishable, exactly as in OpenCode's own model types.
 
 There are two ways to configure the plugin, and both can be combined:
 
-1. **Separate JSONC file (preferred)** — a `.opencode/opencode-floating-models.jsonc`
+1. **Separate JSONC file (preferred)** — a `.opencode/opencode-model-aliases.jsonc`
    file next to your project.
 2. **Inline `options`** — the plugin entry's `options` object, passed by the host directly
    to `ctx.options` (backwards compatible).
 
 ### Separate config file (preferred)
 
-The plugin reads a single `.opencode/opencode-floating-models.jsonc` file at setup time.
+The plugin reads a single `.opencode/opencode-model-aliases.jsonc` file at setup time.
 It looks for the **nearest** file, walking upward from the server's working directory
 (`ctx.location.directory`) to the filesystem root, so a workspace-level file still applies
 even when the session runs inside a nested git repository. The first file found wins:
@@ -43,7 +43,7 @@ ancestral files are not merged, and global OpenCode directories are never consul
 The file is JSONC (comments and trailing commas allowed):
 
 ```jsonc
-// .opencode/opencode-floating-models.jsonc
+// .opencode/opencode-model-aliases.jsonc
 {
   "aliases": {
     "github-copilot/sonnet": {
@@ -67,7 +67,7 @@ With this setup the `opencode.json` plugin entry only needs the package:
 ```json
 {
   "plugins": [
-    { "package": "opencode-floating-models" }
+    { "package": "opencode-model-aliases" }
   ]
 }
 ```
@@ -81,7 +81,7 @@ directly to `ctx.options`:
 {
   "plugins": [
     {
-      "package": "opencode-floating-models",
+      "package": "opencode-model-aliases",
       "options": {
         "aliases": {
           "github-copilot/sonnet": {
@@ -162,7 +162,7 @@ Per-alias options:
   the other aliases keep working.
 - Successful resolution is silent by default. With `debug: true` each alias logs its
   matched/eligible counts, strategy, selected target ID and released timestamp as a
-  `console.warn` line prefixed with `[opencode-floating-models] [debug]` (the v2.0.x host
+  `console.warn` line prefixed with `[opencode-model-aliases] [debug]` (the v2.0.x host
   swallows plugin `console.debug`, so `console.warn` is the only passthrough channel for
   diagnostics). Only public model metadata is ever logged — no credentials, secrets or
   prompt content.
@@ -205,7 +205,7 @@ downloads or external installs (the package is not published; the npm
 publishing/install path is NOT tested). It loads the **packed product package
 itself** through the official `plugins` config entry — with **file-only
 configuration**: the entry carries no `options` and the aliases/strict/debug
-come exclusively from a `.opencode/opencode-floating-models.jsonc` file
+come exclusively from a `.opencode/opencode-model-aliases.jsonc` file
 (JSONC comments + trailing commas) in the temp project — and a local
 models.dev-format catalog (`OPENCODE_MODELS_PATH` +
 `OPENCODE_DISABLE_MODELS_FETCH=1`), against a loopback-only fake
@@ -221,7 +221,7 @@ child process group killed on timeout); a genuine assistant `text` stdout
 event with exactly `pong` from `--format json` (never a substring of an echoed
 prompt); every chat request carries `body.model === "fake-large"` (the
 `latest`-strategy winner) and the dummy key; the consumer catalog sentinel and
-the `[opencode-floating-models] [debug]` alias→winner line appear in stderr;
+the `[opencode-model-aliases] [debug]` alias→winner line appear in stderr;
 no "failed to load plugin". The temp tree, server and subprocess groups are
 always cleaned up.
 
