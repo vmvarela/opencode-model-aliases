@@ -1,0 +1,42 @@
+{
+  "name": "opencode-floating-models",
+  "version": "0.1.0",
+  "description": "OpenCode plugin: resolves one floating model per configured alias from a source list, with pure normalization and latest-strategy selection.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "check": "biome check .",
+    "verify": "pnpm run check && pnpm run typecheck && pnpm run test && pnpm run build"
+  },
+  "packageManager": "pnpm@11.0.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.3.6",
+    "@opencode/plugin": "2.0.16",
+    "@types/node": "^24.19.0",
+    "@types/picomatch": "4.0.2",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  },
+  "peerDependencies": {
+    "@opencode/plugin": "^2.0.16"
+  },
+  "dependencies": {
+    "picomatch": "4.0.3"
+  }
+}
