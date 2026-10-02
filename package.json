@@ -3,23 +3,27 @@
   "version": "0.1.0",
   "description": "OpenCode plugin: materializes floating model aliases into the model catalog with strict/tolerant policies and latest-strategy selection.",
   "type": "module",
-  "main": "./dist/index.js",
+  "main": "./index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+      "default": "./index.js"
     }
   },
   "files": [
-    "dist"
+    "index.js",
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "check": "biome check .",
-    "verify": "pnpm run check && pnpm run typecheck && pnpm run test && pnpm run build"
+    "verify": "pnpm run check && pnpm run typecheck && pnpm run test && pnpm run build && node --check scripts/smoke-opencode.mjs",
+    "smoke:opencode": "node scripts/smoke-opencode.mjs"
   },
   "packageManager": "pnpm@11.0.0",
   "engines": {
@@ -38,5 +42,6 @@
   },
   "dependencies": {
     "picomatch": "4.0.3"
-  }
+  },
+  "license": "MIT"
 }

@@ -1,7 +1,19 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.3.6/schema.json",
   "vcs": { "enabled": false },
-  "files": { "includes": ["src/**", "tests/**", "biome.json"] },
+  "files": {
+    "includes": [
+      "src/**",
+      "tests/**",
+      "scripts/**",
+      "index.js",
+      "biome.json",
+      "package.json",
+      "tsconfig.json",
+      "tsconfig.build.json",
+      "vitest.config.ts"
+    ]
+  },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
   "linter": { "enabled": true, "rules": { "recommended": true } },
   "assist": { "enabled": true }

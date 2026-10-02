@@ -99,8 +99,12 @@ function replay(config: NormalizedConfig, editor: FloatingEditor): void {
     });
     if (config.debug) {
       const [matching, filtering] = stages;
-      console.debug(
-        `${LOG_PREFIX} alias "${alias.key}" -> ${alias.provider}/${winner.modelID}` +
+      // El host v2.0.22 traga console.debug/console.log de los plugins, así que
+      // el diagnóstico de depuración usa console.warn con prefijo [debug]: los
+      // mensajes solo contienen metadatos públicos del modelo (id, recuentos,
+      // timestamp), nunca options/headers/credenciales ni prompts.
+      console.warn(
+        `${LOG_PREFIX} [debug] alias "${alias.key}" -> ${alias.provider}/${winner.modelID}` +
           ` (strategy=latest, matched=${matching?.accepted ?? 0}, eligible=${filtering?.accepted ?? 0},` +
           ` released=${winner.time.released})`,
       );

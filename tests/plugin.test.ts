@@ -486,7 +486,7 @@ describe("opencode-floating-models plugin", () => {
     expect(warnings.some((w) => w.includes('"anthropic/good"'))).toBe(false);
   });
 
-  it("camino exitoso silencioso por defecto; debug:true registra detalles públicos", async () => {
+  it("camino exitoso silencioso por defecto; debug:true registra diagnóstico [debug] por console.warn", async () => {
     const quiet = createHarness({ sources: DEFAULT_SOURCES(), options: SIMPLE_OPTIONS() });
     await floatingModels.setup(quiet.ctx);
     quiet.replay();
@@ -499,8 +499,12 @@ describe("opencode-floating-models plugin", () => {
     });
     await floatingModels.setup(loud.ctx);
     loud.replay();
-    expect(debugs).toHaveLength(2); // repetición del setup + repetición explícita
-    for (const message of debugs) {
+    // El host v2.0.22 traga console.debug; el diagnóstico [debug] va por
+    // console.warn, y console.debug debe seguir sin uso.
+    expect(debugs).toEqual([]);
+    expect(warnings).toHaveLength(2); // repetición del setup + repetición explícita
+    for (const message of warnings) {
+      expect(message).toContain("[opencode-floating-models] [debug]");
       expect(message).toContain('alias "github-copilot/sonnet"');
       expect(message).toContain("github-copilot/sonnet-4-exec");
       expect(message).toContain("strategy=latest");
