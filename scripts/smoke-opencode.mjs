@@ -33,6 +33,15 @@
  *    `body.model === "fake-large"` and the dummy test key; the consumer
  *    sentinel and the `[opencode-model-aliases] [debug]` alias→winner line
  *    appear in stderr; no "failed to load plugin".
+ * 5. Opt-in `--inspect` mode (`pnpm smoke:inspect`): same isolation and
+ *    packed-product loading, but instead of a real session it verifies the
+ *    actual `opencode api` CLI shape and POSTs the plugin RPC through the
+ *    host's real HTTP surface —
+ *    `opencode api --standalone post /api/rpc/opencode-model-aliases/inspect
+ *    --data '{"input":{}}'` — asserting the report shows
+ *    `localfake/latest → localfake/fake-large (active)` with strategy latest
+ *    and ZERO provider requests observed by the loopback sink (inspection
+ *    performs no model call and no session execution).
  *
  * Isolation: `HOME` and all XDG dirs are unique temp directories created
  * before the version probe; the CLI subprocesses get a minimal allow-listed
@@ -42,6 +51,7 @@
  * server, kills subprocess groups and removes exactly this temp tree.
  */
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
@@ -56,6 +66,10 @@ const TARGET = "fake-large";
 const DUMMY_KEY = "smoke-dummy-key-not-a-credential";
 const CLI_TIMEOUT_MS = 120_000;
 const STEP_TIMEOUT_MS = 120_000;
+// Modo opt-in `--inspect`: en lugar de generar texto (sesión real), verifica
+// el informe de inspección vía el RPC real del host (opencode api) y exige
+// cero peticiones al proveedor.
+const INSPECT = process.argv.includes("--inspect");
 
 function childEnv(dir) {
   return {
@@ -307,6 +321,13 @@ async function main() {
         "packed product root entrypoint is missing the public normalizeOptions re-export",
       );
     }
+    // El paquete distribuido debe exponer el TUI: wrapper raíz + build
+    // compilado con sus tipos (export "./tui" en package.json + files).
+    for (const part of ["tui.js", path.join("dist", "tui.js"), path.join("dist", "tui.d.ts")]) {
+      if (!existsSync(path.join(pkgDir, part))) {
+        throw new Error(`packed product is missing "${part}" (required by the ./tui export)`);
+      }
+    }
     console.log(`smoke:opencode: packed product imports cleanly (${tarballs[0]})`);
 
     server = await startFakeServer(requests);
@@ -419,99 +440,206 @@ async function main() {
       }),
     );
 
-    const run = await runSpawn(
-      "opencode",
-      [
-        "run",
-        "--standalone",
-        "--model",
-        ALIAS_KEY,
-        "--format",
-        "json",
-        "--print-logs",
-        "Reply with exactly pong.",
-      ],
-      { cwd: project, env, timeoutMs: CLI_TIMEOUT_MS },
-    );
-
-    const problems = [];
-    if (run.timedOut) {
-      problems.push(`opencode run did not finish within ${CLI_TIMEOUT_MS / 1000}s (group killed)`);
-    } else if (run.code !== 0) {
-      problems.push(`opencode run exited with code ${run.code}`);
-    }
-    if (run.spawnError) problems.push(`spawning opencode failed: ${run.spawnError}`);
-
-    // Evento de texto del asistente, exactamente "pong", desde stdout JSON.
-    const events = run.stdout
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => {
-        try {
-          return JSON.parse(line);
-        } catch {
-          return null;
-        }
-      })
-      .filter((event) => event !== null);
-    const pongEvent = events.find(
-      (event) => event.type === "text" && event.part?.type === "text" && event.part.text === "pong",
-    );
-    if (!pongEvent) {
-      problems.push('stdout had no assistant text event with text exactly "pong"');
-    }
-
-    const chatRequests = requests.filter((r) => r.pathname.endsWith("/chat/completions"));
-    if (chatRequests.length === 0) {
-      problems.push("no chat completion request reached the local server");
-    }
-    for (const request of chatRequests) {
-      if (request.body?.model !== TARGET) {
-        problems.push(
-          `chat request used upstream model "${request.body?.model}", expected "${TARGET}"`,
+    if (INSPECT) {
+      // Modo inspect: cero generación y cero sesión. Se comprueba primero la
+      // forma REAL del comando `opencode api` en el CLI instalado (sin
+      // adivinarla): debe aceptar `method path...` y `--data`.
+      const help = await runSpawn("opencode", ["api", "--help"], {
+        cwd: project,
+        env,
+        timeoutMs: 30_000,
+      });
+      const helpText = (help.stdout + help.stderr).trim();
+      if (!helpText.includes("--data") || !helpText.includes("method path")) {
+        throw new Error(
+          `unexpected \`opencode api\` CLI shape; --help said:\n${helpText.slice(0, 400)}`,
         );
       }
-      if (request.auth !== `Bearer ${DUMMY_KEY}`) {
-        problems.push("a chat request did not use the dummy test key");
+      console.log("smoke:opencode: `opencode api` CLI shape verified (method path... + --data).");
+
+      // Dispara el RPC del plugin por la superficie HTTP real del host:
+      // POST /api/rpc/<rpcID>/<method> con cuerpo {input:{}}.
+      const api = await runSpawn(
+        "opencode",
+        [
+          "api",
+          "--standalone",
+          "--print-logs",
+          "post",
+          "/api/rpc/opencode-model-aliases/inspect",
+          "--data",
+          JSON.stringify({ input: {} }),
+        ],
+        { cwd: project, env, timeoutMs: CLI_TIMEOUT_MS },
+      );
+
+      const problems = [];
+      if (api.timedOut) {
+        problems.push(
+          `opencode api did not finish within ${CLI_TIMEOUT_MS / 1000}s (group killed)`,
+        );
+      } else if (api.code !== 0) {
+        problems.push(`opencode api exited with code ${api.code}`);
       }
-    }
+      if (api.spawnError) problems.push(`spawning opencode failed: ${api.spawnError}`);
 
-    const SENTINEL =
-      "smoke-catalog-consumer: catalog OK providerID=localfake id=latest enabled=true modelID=fake-large";
-    if (!run.stderr.includes(SENTINEL)) {
-      problems.push(`stderr did not contain the consumer catalog sentinel "${SENTINEL}"`);
-    }
-    const debugLine = `[${PLUGIN_ID}] [debug] alias "${ALIAS_KEY}" -> ${PROVIDER}/${TARGET}`;
-    if (!run.stderr.includes(debugLine)) {
-      problems.push(`stderr did not contain the plugin debug line "${debugLine}"`);
-    }
-    if (/failed to load plugin/.test(run.stderr)) {
-      problems.push('host logged "failed to load plugin"');
-    }
+      // El cuerpo de éxito de la ruta RPC es {output: <salida del método>}.
+      let body = null;
+      try {
+        body = JSON.parse(api.stdout.trim());
+      } catch {
+        body = null;
+      }
+      const reportText = body?.output?.text;
+      if (typeof reportText !== "string") {
+        problems.push(
+          `inspect response was not {output:{text:string}}; raw (first 400): ${JSON.stringify(
+            (api.stdout + api.stderr).slice(0, 400),
+          )}`,
+        );
+      } else {
+        if (!reportText.includes(`${ALIAS_KEY} → ${PROVIDER}/${TARGET} (active)`)) {
+          problems.push(`inspect report did not show the active alias target; got:\n${reportText}`);
+        }
+        if (!reportText.includes("strategy: latest")) {
+          problems.push("inspect report did not mention the latest strategy");
+        }
+        // El catálogo id === wire modelID en este entorno: sin mención wire.
+        if (reportText.includes("wire modelID")) {
+          problems.push(
+            "inspect report mentioned a wire modelID although catalog id === wire modelID",
+          );
+        }
+      }
 
-    if (problems.length > 0) {
-      console.error("smoke:opencode: FAILED");
-      for (const problem of problems) console.error(`  - ${problem}`);
-      console.error("--- stdout (last 3000 chars) ---");
-      console.error(run.stdout.slice(-3000) || "(empty)");
-      console.error("--- stderr (last 3000 chars) ---");
-      console.error(run.stderr.slice(-3000) || "(empty)");
-      const interesting = run.stderr
+      // El sink cuenta TODA petición al proveedor: cero tras la observación
+      // acotada (el subproceso terminó); inspeccionar no ejecuta sesiones.
+      if (requests.length !== 0) {
+        const seen = requests.map((r) => `${r.method} ${r.pathname}`).join(", ");
+        problems.push(
+          `expected 0 provider requests in inspect mode, observed ${requests.length}: ${seen}`,
+        );
+      }
+      if (/failed to load plugin/.test(api.stderr)) {
+        problems.push('host logged "failed to load plugin"');
+      }
+      const SENTINEL =
+        "smoke-catalog-consumer: catalog OK providerID=localfake id=latest enabled=true modelID=fake-large";
+      if (!api.stderr.includes(SENTINEL)) {
+        problems.push(`stderr did not contain the consumer catalog sentinel "${SENTINEL}"`);
+      }
+
+      if (problems.length > 0) {
+        console.error("smoke:opencode (inspect): FAILED");
+        for (const problem of problems) console.error(`  - ${problem}`);
+        console.error("--- stdout (last 3000 chars) ---");
+        console.error(api.stdout.slice(-3000) || "(empty)");
+        console.error("--- stderr (last 3000 chars) ---");
+        console.error(api.stderr.slice(-3000) || "(empty)");
+        throw new Error(`smoke:opencode (inspect): FAILED with ${problems.length} problem(s)`);
+      }
+
+      console.log("smoke:opencode (inspect): PASSED");
+      console.log(`  report: ${reportText.split("\n").join(" | ")}`);
+      console.log(`  provider requests observed: ${requests.length}`);
+    } else {
+      const run = await runSpawn(
+        "opencode",
+        [
+          "run",
+          "--standalone",
+          "--model",
+          ALIAS_KEY,
+          "--format",
+          "json",
+          "--print-logs",
+          "Reply with exactly pong.",
+        ],
+        { cwd: project, env, timeoutMs: CLI_TIMEOUT_MS },
+      );
+
+      const problems = [];
+      if (run.timedOut) {
+        problems.push(
+          `opencode run did not finish within ${CLI_TIMEOUT_MS / 1000}s (group killed)`,
+        );
+      } else if (run.code !== 0) {
+        problems.push(`opencode run exited with code ${run.code}`);
+      }
+      if (run.spawnError) problems.push(`spawning opencode failed: ${run.spawnError}`);
+
+      // Evento de texto del asistente, exactamente "pong", desde stdout JSON.
+      const events = run.stdout
         .split("\n")
-        .filter((line) => /opencode-model-aliases|smoke-catalog-consumer|debug/.test(line));
-      console.error("--- plugin-relevant stderr lines ---");
-      console.error(interesting.join("\n") || "(none)");
-      // Lanzar en vez de exit: el finally cierra el servidor y borra el temp.
-      throw new Error(`smoke:opencode: FAILED with ${problems.length} problem(s)`);
-    }
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+          try {
+            return JSON.parse(line);
+          } catch {
+            return null;
+          }
+        })
+        .filter((event) => event !== null);
+      const pongEvent = events.find(
+        (event) =>
+          event.type === "text" && event.part?.type === "text" && event.part.text === "pong",
+      );
+      if (!pongEvent) {
+        problems.push('stdout had no assistant text event with text exactly "pong"');
+      }
 
-    console.log("smoke:opencode: PASSED");
-    console.log(
-      `  alias ${ALIAS_KEY} materialized as ${PROVIDER}/${TARGET} (catalog + wire model)`,
-    );
-    console.log(`  chat requests observed: ${chatRequests.length}`);
-    console.log("  assistant text event: pong (exact match)");
+      const chatRequests = requests.filter((r) => r.pathname.endsWith("/chat/completions"));
+      if (chatRequests.length === 0) {
+        problems.push("no chat completion request reached the local server");
+      }
+      for (const request of chatRequests) {
+        if (request.body?.model !== TARGET) {
+          problems.push(
+            `chat request used upstream model "${request.body?.model}", expected "${TARGET}"`,
+          );
+        }
+        if (request.auth !== `Bearer ${DUMMY_KEY}`) {
+          problems.push("a chat request did not use the dummy test key");
+        }
+      }
+
+      const SENTINEL =
+        "smoke-catalog-consumer: catalog OK providerID=localfake id=latest enabled=true modelID=fake-large";
+      if (!run.stderr.includes(SENTINEL)) {
+        problems.push(`stderr did not contain the consumer catalog sentinel "${SENTINEL}"`);
+      }
+      const debugLine = `[${PLUGIN_ID}] [debug] alias "${ALIAS_KEY}" -> ${PROVIDER}/${TARGET}`;
+      if (!run.stderr.includes(debugLine)) {
+        problems.push(`stderr did not contain the plugin debug line "${debugLine}"`);
+      }
+      if (/failed to load plugin/.test(run.stderr)) {
+        problems.push('host logged "failed to load plugin"');
+      }
+
+      if (problems.length > 0) {
+        console.error("smoke:opencode: FAILED");
+        for (const problem of problems) console.error(`  - ${problem}`);
+        console.error("--- stdout (last 3000 chars) ---");
+        console.error(run.stdout.slice(-3000) || "(empty)");
+        console.error("--- stderr (last 3000 chars) ---");
+        console.error(run.stderr.slice(-3000) || "(empty)");
+        const interesting = run.stderr
+          .split("\n")
+          .filter((line) => /opencode-model-aliases|smoke-catalog-consumer|debug/.test(line));
+        console.error("--- plugin-relevant stderr lines ---");
+        console.error(interesting.join("\n") || "(none)");
+        // Lanzar en vez de exit: el finally cierra el servidor y borra el temp.
+        throw new Error(`smoke:opencode: FAILED with ${problems.length} problem(s)`);
+      }
+
+      console.log("smoke:opencode: PASSED");
+      console.log(
+        `  alias ${ALIAS_KEY} materialized as ${PROVIDER}/${TARGET} (catalog + wire model)`,
+      );
+      console.log(`  chat requests observed: ${chatRequests.length}`);
+      console.log("  assistant text event: pong (exact match)");
+    }
   } finally {
     if (server) {
       server.closeAllConnections();

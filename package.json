@@ -9,10 +9,15 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./index.js"
+    },
+    "./tui": {
+      "types": "./dist/tui.d.ts",
+      "default": "./tui.js"
     }
   },
   "files": [
     "index.js",
+    "tui.js",
     "dist",
     "README.md",
     "LICENSE"
@@ -23,7 +28,8 @@
     "test": "vitest run",
     "check": "biome check .",
     "verify": "pnpm run check && pnpm run typecheck && pnpm run test && pnpm run build && node --check scripts/smoke-opencode.mjs",
-    "smoke:opencode": "node scripts/smoke-opencode.mjs"
+    "smoke:opencode": "node scripts/smoke-opencode.mjs",
+    "smoke:inspect": "node scripts/smoke-opencode.mjs --inspect"
   },
   "packageManager": "pnpm@11.0.0",
   "engines": {

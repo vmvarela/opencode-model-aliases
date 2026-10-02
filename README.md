@@ -167,6 +167,34 @@ Per-alias options:
   diagnostics). Only public model metadata is ever logged — no credentials, secrets or
   prompt content.
 
+## Inspecting aliases (`/model-aliases`)
+
+The plugin registers a single RPC (`opencode-model-aliases`, method `inspect`) that renders
+the current alias mapping without ever calling a model. Type `/model-aliases` in the composer,
+or select **Model aliases** from the command palette. A local dialog shows,
+for every configured alias, the actually selected target in the final catalog
+(`provider/catalogID`), the wire `modelID` separately when it differs from the catalog ID,
+and — for tolerant unresolved aliases — the failure kind and reason. Resolved aliases are
+labeled `active` only when they are still visible and enabled in the final catalog (a later
+policy can remove or disable a materialized alias).
+
+The report is a snapshot of the last **successful** catalog replay, replaced atomically after
+each replay and cleared when a replay fails: if the last replay failed, the catalog could
+not be read, or the published mapping could not be confirmed against the final catalog
+(e.g. a later policy rewired the alias), you get a clear "unavailable" message instead of a
+stale or partial mapping.
+With no aliases configured the report is `No aliases configured.`
+
+In a server-only setup (no TUI), the same report is available through the OpenCode CLI:
+
+```sh
+opencode api --standalone post /api/rpc/opencode-model-aliases/inspect --data '{"input":{}}'
+```
+
+The success body is `{"output": {"text": "<report>"}}`. Public IDs and reasons are sanitized
+(control characters are escaped). Inspection reads the current catalog, which can replay
+transforms if invalidated; it never requests model generation or submits session messages.
+
 ## Limitations
 
 - Only `strategy: "latest"` is implemented; other strategies are rejected during
@@ -225,6 +253,15 @@ the `[opencode-model-aliases] [debug]` alias→winner line appear in stderr;
 no "failed to load plugin". The temp tree, server and subprocess groups are
 always cleaned up.
 
+`pnpm smoke:inspect` runs the same isolated, packed-product setup with the
+`--inspect` flag: instead of a real session it verifies the actual
+`opencode api` CLI shape and then calls the plugin's RPC through the host's
+real HTTP surface (`post /api/rpc/opencode-model-aliases/inspect` with
+`{"input":{}}`), asserting the report shows
+`localfake/latest → localfake/fake-large (active)` with strategy latest and
+**zero** provider requests observed by the loopback sink — inspection performs
+no model call and no session execution.
+
 ```sh
 TMPDIR=/path/to/approved-tmp pnpm smoke:opencode
 ```
@@ -234,7 +271,8 @@ TMPDIR=/path/to/approved-tmp pnpm smoke:opencode
 > root `index.js` entrypoint loads as-is, no manual shim needed.
 
 Pure config normalization and resolution live in `src/normalize.ts` / `src/resolve.ts`; the
-JSONC config-file loader is `src/config-file.ts`; the OpenCode v2 adapter is `src/plugin.ts`.
+JSONC config-file loader is `src/config-file.ts`; the OpenCode v2 adapter is `src/plugin.ts`;
+the RPC contract is `src/rpc.ts` and the inspection report builder/formatter is `src/report.ts`.
 
 ## License
 

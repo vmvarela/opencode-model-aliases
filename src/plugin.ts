@@ -7,7 +7,9 @@ import {
 } from "./config.js";
 import { loadConfigFile } from "./config-file.js";
 import { normalizeOptions } from "./normalize.js";
+import { type AliasReportRow, buildRows, formatReport, UNAVAILABLE_REPORT } from "./report.js";
 import { resolveLatest } from "./resolve.js";
+import { ModelAliasesRpc } from "./rpc.js";
 
 const PLUGIN_ID = "opencode-model-aliases";
 const LOG_PREFIX = `[${PLUGIN_ID}]`;
@@ -49,8 +51,12 @@ function displayName(alias: NormalizedAlias): string {
  * del catálogo fuente fresco (sin salida de repeticiones previas): snapshot
  * una vez, colisión verificada contra ese snapshot, resolución única por
  * alias y materialización. Ningún alias alimenta a otro.
+ *
+ * Devuelve las filas de informe construidas de los MISMOS resultados de
+ * resolución usados para materializar; el llamador solo las publica si la
+ * repetición completa (incluida la materialización) tuvo éxito.
  */
-function replay(config: NormalizedConfig, editor: FloatingEditor): void {
+function replay(config: NormalizedConfig, editor: FloatingEditor): AliasReportRow[] {
   const snapshot = editor.list();
 
   // Colisión de configuración: el id del alias ya existe como modelo fuente.
@@ -116,6 +122,8 @@ function replay(config: NormalizedConfig, editor: FloatingEditor): void {
       );
     }
   }
+
+  return buildRows(results);
 }
 
 export default Plugin.define({
@@ -181,12 +189,21 @@ export default Plugin.define({
     let hasInitialError = false;
     let initialError: unknown;
 
+    // Snapshot de informe del setup (cierre pequeño, solo primitivas):
+    // null significa indisponibilidad — la última repetición falló y no hay
+    // mapeo actual descibible. Se reemplaza una vez por repetición, solo si
+    // toda la repetición/materialización tuvo éxito; ante cualquier fallo se
+    // limpia para no describir mapeos parciales ni stale como actuales.
+    let reportRows: readonly AliasReportRow[] | null = null;
+
     const registration = await ctx.model.transform((hostEditor) => {
       try {
         // Límite único host→adaptador: DeepMutable del host degrada los strings
         // con brand; aquí se adapta a la vista limpia del editor.
-        replay(normalized.config, hostEditor as unknown as FloatingEditor);
+        const rows = replay(normalized.config, hostEditor as unknown as FloatingEditor);
+        reportRows = rows;
       } catch (error) {
+        reportRows = null;
         if (initializing && !hasInitialError) {
           hasInitialError = true;
           initialError = error;
@@ -208,7 +225,74 @@ export default Plugin.define({
       throw initialError;
     }
     initializing = false;
+
+    // Único RPC del plugin, registrado tras la inicialización exitosa. El
+    // handler NO vuelve a resolver ni consulta APIs de proveedor/sesión para
+    // inspeccionar: primero sincroniza el registro con ctx.model.list() (que
+    // además revela si un refresco falló) y después lee el snapshot publicado
+    // por el transform, verificando contra el catálogo final la identidad de
+    // cada alias resuelto (una política posterior puede retirar, deshabilitar
+    // o reescribir el modelID de ejecución del alias materializado).
+    let rpcRegistration: { dispose: () => Promise<void> };
+    try {
+      rpcRegistration = await ctx.rpc.register(ModelAliasesRpc, {
+        inspect: async () => {
+          // Vista mínima del catálogo final; solo primitivas de identidad
+          // (proveedor, id, modelID de ejecución y enabled). Sin objetos
+          // Model.Info completos, settings, headers ni credenciales.
+          let catalog: ReadonlyArray<{
+            providerID: string;
+            id: string;
+            modelID?: string;
+            enabled?: boolean;
+          }>;
+          try {
+            catalog = (await ctx.model.list()).data;
+          } catch {
+            // El refresco falló: ni el snapshot previo ni uno parcial; texto de
+            // indisponibilidad.
+            return { text: UNAVAILABLE_REPORT };
+          }
+          const snapshot = reportRows;
+          if (snapshot === null) {
+            return { text: UNAVAILABLE_REPORT };
+          }
+          // Visibilidad final por primitivas: un alias deshabilitado por una
+          // política posterior no se etiqueta como activo; un alias retirado
+          // conserva el comportamiento existente (inactive).
+          const wire = new Map<string, string | undefined>();
+          const visible = new Set<string>();
+          for (const model of catalog) {
+            const entry = `${model.providerID}/${model.id}`;
+            wire.set(entry, model.modelID);
+            if (model.enabled !== false) visible.add(entry);
+          }
+          // Guardia de identidad: si el alias sigue habilitado pero una
+          // política posterior cambió su modelID de ejecución respecto del
+          // seleccionado, el snapshot ya no describe el mapeo real. En vez de
+          // adivinar o mostrar el objetivo viejo como activo, informe
+          // indisponible completo (caso raro de política en conflicto).
+          for (const row of snapshot) {
+            if (row.status !== "resolved" || !visible.has(row.key)) continue;
+            const selected = row.wireModelID ?? row.catalogID;
+            if (wire.get(row.key) !== selected) {
+              return { text: UNAVAILABLE_REPORT };
+            }
+          }
+          return { text: formatReport(snapshot, visible) };
+        },
+      });
+    } catch (error) {
+      // El modelo ya está registrado: si el RPC no pudo registrarse, el setup
+      // rechaza dejando cero recursos vivos.
+      await registration.dispose();
+      throw error;
+    }
+
     return async () => {
+      // Limpieza en orden inverso al registro: primero el RPC, luego el
+      // transform. Ambos dispose son idempotentes.
+      await rpcRegistration.dispose();
       await registration.dispose();
     };
   },

@@ -5,91 +5,11 @@ import { isPlainObject } from "../src/config.js";
 import { loadConfigFile } from "../src/config-file.js";
 import floatingModels from "../src/index.js";
 import { makeTempRoot, removeTempRoot, writeConfigFile } from "./config-fs.js";
-
-type ModelInfo = import("@opencode/plugin").Model.Info;
-
-/** Fábrica mínima de Model.Info para estos tests de configuración. */
-function sourceModel(id: string, providerID: string, released: number): ModelInfo {
-  return {
-    id,
-    modelID: id,
-    providerID,
-    name: id,
-    capabilities: { tools: true, input: ["text"], output: ["text"] },
-    variants: [],
-    time: { released },
-    cost: [],
-    status: "active",
-    enabled: true,
-    limit: { context: 200_000, output: 8_192 },
-  } as unknown as ModelInfo;
-}
-
-function createHarness(input: {
-  sources?: ModelInfo[];
-  options?: Record<string, unknown>;
-  directory: string;
-}) {
-  const source = new Map<string, ModelInfo>();
-  for (const model of input.sources ?? []) {
-    source.set(`${model.providerID}/${model.id}`, structuredClone(model));
-  }
-  let working = new Map<string, ModelInfo>();
-  const callbacks: Array<(editor: unknown) => void> = [];
-  let listFailure: unknown;
-
-  const freshFromSource = () => {
-    const next = new Map<string, ModelInfo>();
-    for (const [key, model] of source) next.set(key, structuredClone(model));
-    return next;
-  };
-  const editor = {
-    list: () => [...working.values()],
-    update: (providerID: string, modelID: string, update: (model: ModelInfo) => void) => {
-      const key = `${providerID}/${modelID}`;
-      const current = working.get(key) ?? ({ id: modelID, modelID, providerID } as ModelInfo);
-      update(current);
-      working.set(key, current);
-    },
-  };
-  const ctx = {
-    location: { directory: input.directory },
-    options: input.options ?? {},
-    model: {
-      transform: async (callback: (editor: unknown) => void) => {
-        callbacks.push(callback);
-        return {
-          dispose: async () => {
-            const index = callbacks.indexOf(callback);
-            if (index >= 0) callbacks.splice(index, 1);
-          },
-        };
-      },
-      list: async () => {
-        if (listFailure !== undefined) {
-          const error = listFailure;
-          listFailure = undefined;
-          throw error;
-        }
-        working = freshFromSource();
-        for (const callback of [...callbacks]) callback(editor);
-        return editor.list();
-      },
-    },
-  } as unknown as import("@opencode/plugin").Plugin.Context;
-  return {
-    ctx,
-    view: () => working,
-    callbacks,
-    failNextList: (error: unknown) => {
-      listFailure = error;
-    },
-  };
-}
+import { createHarness, sourceModel } from "./harness.js";
 
 const SOURCES = () => [
-  sourceModel("claude-a", "anthropic", 1_000),
-  sourceModel("claude-b", "anthropic", 2_000),
+  sourceModel({ id: "claude-a", providerID: "anthropic", released: 1_000 }),
+  sourceModel({ id: "claude-b", providerID: "anthropic", released: 2_000 }),
 ];
 
 let tempRoot: string;
@@ -371,5 +291,18 @@ describe("separate JSONC config file", () => {
         result.file.path.endsWith(path.join(".opencode", "opencode-model-aliases.jsonc")),
       ).toBe(true);
     }
+  });
+
+  it("el RPC inspect expone el alias definido solo en el archivo", async () => {
+    const project = path.join(tempRoot, "proj");
+    mkdirSync(project, { recursive: true });
+    writeConfigFile(project, '{ "aliases": { "anthropic/float": { "match": "anthropic/**" } } }');
+    const harness = createHarness({ sources: SOURCES(), directory: project });
+    await floatingModels.setup(harness.ctx);
+    // Un único registro RPC con la definición del contrato.
+    expect(harness.rpc.definitions).toHaveLength(1);
+    expect(harness.rpc.registrations[0]?.disposed).toBe(false);
+    const text = await harness.inspect();
+    expect(text).toContain("anthropic/float → anthropic/claude-b (active)");
   });
 });
