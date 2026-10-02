@@ -25,7 +25,57 @@ distinguishable, exactly as in OpenCode's own model types.
 
 ## Configuration
 
-The host passes the plugin entry's `options` object directly to `ctx.options`:
+There are two ways to configure the plugin, and both can be combined:
+
+1. **Separate JSONC file (preferred)** — a `.opencode/opencode-floating-models.jsonc`
+   file next to your project.
+2. **Inline `options`** — the plugin entry's `options` object, passed by the host directly
+   to `ctx.options` (backwards compatible).
+
+### Separate config file (preferred)
+
+The plugin reads a single `.opencode/opencode-floating-models.jsonc` file at setup time.
+It looks for the **nearest** file, walking upward from the server's working directory
+(`ctx.location.directory`) to the filesystem root, so a workspace-level file still applies
+even when the session runs inside a nested git repository. The first file found wins:
+ancestral files are not merged, and global OpenCode directories are never consulted.
+
+The file is JSONC (comments and trailing commas allowed):
+
+```jsonc
+// .opencode/opencode-floating-models.jsonc
+{
+  "aliases": {
+    "github-copilot/sonnet": {
+      "match": "github-copilot/claude-sonnet-*",
+      "exclude": ["github-copilot/*-preview"],
+      "filter": { "status": ["active", "alpha"] },
+      "select": { "strategy": "latest" },
+      "name": "Sonnet (floating)"
+    },
+    "anthropic/smart": {
+      "match": ["anthropic/claude-*"]
+    },
+  },
+  "strict": false,
+  "debug": false,
+}
+```
+
+With this setup the `opencode.json` plugin entry only needs the package:
+
+```json
+{
+  "plugins": [
+    { "package": "opencode-floating-models" }
+  ]
+}
+```
+
+### Inline options (backwards compatible)
+
+Alternatively (or additionally), the host passes the plugin entry's `options` object
+directly to `ctx.options`:
 
 ```json
 {
@@ -55,6 +105,20 @@ The host passes the plugin entry's `options` object directly to `ctx.options`:
 
 Place this plugin before downstream plugins that consume its aliases so their setup runs
 after the alias transform is registered.
+
+#### Precedence between file and inline options
+
+When both sources are present, the file is the base and the inline `options` win:
+
+- Supplied top-level inline values (`strict`, `debug`) override the file's — an explicit
+  inline `false` is respected.
+- The alias maps are **unioned by key**; for the same key, the inline alias record
+  **replaces the file's complete record** (no field-by-field merging).
+
+The config file is read once at plugin setup; editing it afterwards requires reloading
+the plugin or restarting the OpenCode server to take effect. A missing file is not an error as long
+as `aliases` is supplied inline; the merged configuration must still contain `aliases`
+(an empty object `{}` is a valid no-op).
 
 Global options:
 
@@ -139,7 +203,10 @@ pack`s it and extracts the tarball into a fresh temp tree, linking the repo's
 existing `node_modules` for the runtime peer dependency — no registry
 downloads or external installs (the package is not published; the npm
 publishing/install path is NOT tested). It loads the **packed product package
-itself** through the official `plugins` config entry and a local
+itself** through the official `plugins` config entry — with **file-only
+configuration**: the entry carries no `options` and the aliases/strict/debug
+come exclusively from a `.opencode/opencode-floating-models.jsonc` file
+(JSONC comments + trailing commas) in the temp project — and a local
 models.dev-format catalog (`OPENCODE_MODELS_PATH` +
 `OPENCODE_DISABLE_MODELS_FETCH=1`), against a loopback-only fake
 OpenAI-compatible endpoint. `HOME`/XDG directories are unique temp dirs and
@@ -167,7 +234,7 @@ TMPDIR=/path/to/approved-tmp pnpm smoke:opencode
 > root `index.js` entrypoint loads as-is, no manual shim needed.
 
 Pure config normalization and resolution live in `src/normalize.ts` / `src/resolve.ts`; the
-OpenCode v2 adapter is `src/plugin.ts`.
+JSONC config-file loader is `src/config-file.ts`; the OpenCode v2 adapter is `src/plugin.ts`.
 
 ## License
 

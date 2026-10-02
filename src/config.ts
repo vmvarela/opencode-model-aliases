@@ -1,6 +1,11 @@
 /** Estatus reales de Model.Info. */
 export type ModelStatus = "alpha" | "beta" | "deprecated" | "active";
 
+/** Objeto plano (no null, no array); contenedor válido para options/aliases. */
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /** Estatus admitidos en filter.status; `deprecated` se rechaza siempre. */
 export type AllowedStatus = Exclude<ModelStatus, "deprecated">;
 

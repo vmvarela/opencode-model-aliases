@@ -1,5 +1,11 @@
 import { type Model, Plugin } from "@opencode/plugin";
-import type { NormalizedAlias, NormalizedConfig, Options } from "./config.js";
+import {
+  isPlainObject,
+  type NormalizedAlias,
+  type NormalizedConfig,
+  type Options,
+} from "./config.js";
+import { loadConfigFile } from "./config-file.js";
 import { normalizeOptions } from "./normalize.js";
 import { resolveLatest } from "./resolve.js";
 
@@ -115,10 +121,52 @@ function replay(config: NormalizedConfig, editor: FloatingEditor): void {
 export default Plugin.define({
   id: PLUGIN_ID,
   async setup(ctx) {
-    // El host pasa directamente el objeto options de la entrada del plugin.
-    // Entrada no confiable; normalizeOptions la valida en ejecución y una
-    // configuración malformada falla antes de registrar cualquier transform.
-    const normalized = normalizeOptions((ctx.options ?? {}) as Options);
+    // Carga del archivo de configuración más cercano, ANTES de registrar
+    // cualquier transform: un fallo de lectura/parseo/fusión deja cero
+    // transforms registrados.
+    const loaded = await loadConfigFile(ctx.location.directory);
+    if (!loaded.ok) {
+      throw new Error(`${LOG_PREFIX} invalid configuration: ${loaded.reason}`);
+    }
+    const fileOptions = loaded.file?.options;
+
+    // Entrada no confiable; se fusiona con el archivo como base y los valores
+    // inline del host con prioridad. La validación completa ocurre en
+    // normalizeOptions sobre el resultado fusionado.
+    const inline = ctx.options as unknown;
+    if (inline !== undefined && inline !== null && !isPlainObject(inline)) {
+      throw new Error(`${LOG_PREFIX} invalid configuration: options must be an object`);
+    }
+    const inlineOptions = isPlainObject(inline) ? inline : {};
+
+    const merged: Record<string, unknown> = {};
+    for (const key of ["strict", "debug"] as const) {
+      // El valor inline, si fue suministrado (incluso `false`), gana al archivo.
+      if (inlineOptions[key] !== undefined) {
+        merged[key] = inlineOptions[key];
+      } else if (fileOptions?.[key] !== undefined) {
+        merged[key] = fileOptions[key];
+      }
+    }
+
+    // Union por clave: un registro inline reemplaza el AliasConfig completo
+    // del archivo para esa clave (sin fusión parcial). Los contenedores de
+    // cada fuente ya fueron validados; un contenedor inline inválido falla
+    // aquí en vez de extenderse silenciosamente en el mapa.
+    const inlineAliases = inlineOptions.aliases;
+    if (inlineAliases !== undefined && !isPlainObject(inlineAliases)) {
+      throw new Error(
+        `${LOG_PREFIX} invalid configuration: aliases must be an object ({} is a valid no-op)`,
+      );
+    }
+    if (fileOptions?.aliases !== undefined || inlineAliases !== undefined) {
+      merged.aliases = {
+        ...fileOptions?.aliases,
+        ...(isPlainObject(inlineAliases) ? inlineAliases : {}),
+      };
+    }
+
+    const normalized = normalizeOptions(merged as unknown as Options);
     if (!normalized.ok) {
       throw new Error(`${LOG_PREFIX} invalid configuration: ${normalized.failure.reason}`);
     }

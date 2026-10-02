@@ -1,6 +1,7 @@
 import type { Model, Plugin } from "@opencode/plugin";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import floatingModels from "../src/index.js";
+import { makeTempRoot, removeTempRoot } from "./config-fs.js";
 
 type ModelInfo = Model.Info;
 
@@ -60,7 +61,12 @@ function sourceModel(overrides: {
  *   (dispose) y resuelve la lista con éxito igualmente.
  * - `dispose()` separa el callback registrado y es idempotente.
  */
-function createHarness(input: { sources?: ModelInfo[]; options?: Record<string, unknown> }) {
+function createHarness(input: {
+  sources?: ModelInfo[];
+  options?: Record<string, unknown>;
+  /** Directorio del host para el lookup del archivo de config; nunca el repo real. */
+  directory?: string;
+}) {
   const source = new Map<string, ModelInfo>();
   for (const model of input.sources ?? []) {
     source.set(`${model.providerID}/${model.id}`, structuredClone(model));
@@ -102,6 +108,7 @@ function createHarness(input: { sources?: ModelInfo[]; options?: Record<string, 
   };
 
   const ctx = {
+    location: { directory: input.directory ?? tempRoot },
     options: input.options ?? {},
     model: {
       transform: async (callback: (editor: unknown) => void) => {
@@ -174,8 +181,10 @@ const SIMPLE_OPTIONS = () => ({
 
 let warnings: string[];
 let debugs: string[];
+let tempRoot: string;
 
 beforeEach(() => {
+  tempRoot = makeTempRoot();
   warnings = [];
   debugs = [];
   vi.spyOn(console, "warn").mockImplementation((message) => {
@@ -188,6 +197,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  removeTempRoot(tempRoot);
 });
 
 describe("opencode-floating-models plugin", () => {

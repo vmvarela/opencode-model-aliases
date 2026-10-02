@@ -13,8 +13,12 @@
  * 2. Starts a loopback-only fake OpenAI-compatible endpoint and a local
  *    models.dev-format catalog (`OPENCODE_MODELS_PATH` +
  *    `OPENCODE_DISABLE_MODELS_FETCH=1`), then loads the PACKED PRODUCT
- *    PACKAGE ITSELF through the official `plugins` config entry (the host
- *    delivers the entry `options` to `ctx.options` natively).
+ *    PACKAGE ITSELF through the official `plugins` config entry with
+ *    FILE-ONLY configuration: the plugin entry carries no `options` and the
+ *    configuration comes exclusively from a
+ *    `.opencode/opencode-floating-models.jsonc` file (JSONC comments and
+ *    trailing commas) in the temp project, exercising the plugin's own file
+ *    loader.
  * 3. A separate downstream consumer plugin (temp root package, `main:
  *    index.js`, loaded after the product) reads `ctx.model.list()` and
  *    asserts the host catalog state: `localfake/latest` selectable,
@@ -347,6 +351,30 @@ async function main() {
 
     const project = path.join(dir, "proj");
     await mkdir(project, { recursive: true });
+    // Configuración del plugin SOLO en archivo JSONC separado (comentarios +
+    // trailing commas): la entrada nativa del plugin no lleva options y el
+    // archivo debe hallarse subiendo desde el cwd del proyecto.
+    const pluginConfigDir = path.join(project, ".opencode");
+    await mkdir(pluginConfigDir, { recursive: true });
+    await writeFile(
+      path.join(pluginConfigDir, "opencode-floating-models.jsonc"),
+      [
+        "// Configuración del plugin (JSONC): comentarios y trailing commas admitidos.",
+        "{",
+        `  "aliases": {`,
+        `    // El alias materializa el ganador latest de los modelos fake-*.`,
+        `    "${ALIAS_KEY}": {`,
+        `      "match": "${PROVIDER}/fake-*",`,
+        `      "select": { "strategy": "latest" },`,
+        `    },`,
+        `  },`,
+        `  "strict": true,`,
+        `  "debug": true,`,
+        `}`,
+        ``,
+      ].join("\n"),
+      "utf8",
+    );
     await writeFile(
       path.join(project, "opencode.json"),
       JSON.stringify(
@@ -356,16 +384,8 @@ async function main() {
           autoupdate: false,
           model: ALIAS_KEY,
           plugins: [
-            {
-              package: pkgDir,
-              options: {
-                aliases: {
-                  [ALIAS_KEY]: { match: `${PROVIDER}/fake-*`, select: { strategy: "latest" } },
-                },
-                strict: true,
-                debug: true,
-              },
-            },
+            // Sin options: toda la configuración viene del archivo JSONC.
+            { package: pkgDir },
             { package: consumerDir, options: {} },
           ],
           providers: {
