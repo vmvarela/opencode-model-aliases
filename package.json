@@ -5,6 +5,13 @@
   "type": "module",
   "main": "./index.js",
   "types": "./dist/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vmvarela/opencode-model-aliases.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -29,7 +36,8 @@
     "check": "biome check .",
     "verify": "pnpm run check && pnpm run typecheck && pnpm run test && pnpm run build && node --check scripts/smoke-opencode.mjs",
     "smoke:opencode": "node scripts/smoke-opencode.mjs",
-    "smoke:inspect": "node scripts/smoke-opencode.mjs --inspect"
+    "smoke:inspect": "node scripts/smoke-opencode.mjs --inspect",
+    "check:release": "node scripts/check-release.mjs"
   },
   "packageManager": "pnpm@11.0.0",
   "engines": {
@@ -40,6 +48,7 @@
     "@opencode/plugin": "2.0.16",
     "@types/node": "^24.19.0",
     "@types/picomatch": "4.0.2",
+    "semantic-release": "25.0.9",
     "typescript": "5.9.3",
     "vitest": "3.2.4"
   },
