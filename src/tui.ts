@@ -70,6 +70,7 @@ const plugin = {
       append: "app",
       render: () => {
         context.keymap.layer(() => ({
+          mode: "global",
           commands: [command],
         }));
         return null;

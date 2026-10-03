@@ -178,6 +178,10 @@ and — for tolerant unresolved aliases — the failure kind and reason. Resolve
 labeled `active` only when they are still visible and enabled in the final catalog (a later
 policy can remove or disable a materialized alias).
 
+In OpenCode 2.0.22, selecting the slash suggestion completes `/model-aliases `;
+press Enter again to open the report. This completion step is host behavior.
+The command palette opens the report directly.
+
 The report is a snapshot of the last **successful** catalog replay, replaced atomically after
 each replay and cleared when a replay fails: if the last replay failed, the catalog could
 not be read, or the published mapping could not be confirmed against the final catalog

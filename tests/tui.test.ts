@@ -45,6 +45,7 @@ interface StrictContextOptions {
 
 function createStrictContext(options?: StrictContextOptions) {
   const registeredLayers: Array<() => KeymapLayer> = [];
+  const returnedLayers: KeymapLayer[] = [];
   const activeCommands: KeymapCommand[] = [];
   const alerts: Array<{ title: string; message: string }> = [];
   const inspectCalls: Array<{ input: unknown; options?: unknown }> = [];
@@ -69,6 +70,7 @@ function createStrictContext(options?: StrictContextOptions) {
     layer: vi.fn((build: () => KeymapLayer) => {
       registeredLayers.push(build);
       const layer = build();
+      returnedLayers.push(layer);
       if (layer.commands) {
         activeCommands.push(...layer.commands);
       }
@@ -191,6 +193,7 @@ function createStrictContext(options?: StrictContextOptions) {
     alerts,
     inspectCalls,
     activeCommands,
+    returnedLayers,
     remountSlot: () => {
       activeCommands.length = 0;
       if (activeAppRender) {
@@ -224,6 +227,9 @@ describe("opencode-model-aliases TUI plugin", () => {
       arguments: true,
     });
     expect(typeof command?.run).toBe("function");
+
+    expect(harness.returnedLayers).toHaveLength(1);
+    expect(harness.returnedLayers[0]?.mode).toBe("global");
 
     if (typeof cleanup === "function") {
       cleanup();
