@@ -285,7 +285,7 @@ TMPDIR=/path/to/approved-tmp pnpm smoke:opencode
 publishing](https://docs.npmjs.com/trusted-publishers) via OIDC on
 GitHub-hosted runners (no `NPM_TOKEN`, no persistent npm token) and a GitHub
 Release per version whose notes serve as the changelog (there is no changelog
-bot and no version-commit push to `main`). The workflow only runs on `main`
+bot and no version-commit push to `master`). The workflow only runs on `master`
 and only when the repository variable `NPM_RELEASE_ENABLED` is set to `true`;
 as long as that variable is undefined it stays disabled. The offline
 release-consistency check (`pnpm run check:release`, also integrated in the
@@ -300,14 +300,14 @@ order: creating the public GitHub repository `vmvarela/opencode-model-aliases`
 with the same `repository` metadata already present in `package.json`; doing
 the **first publish manually** (a new package cannot bootstrap OIDC trusted
 publishing yet) with 2FA enabled and then tagging `v0.1.0` (annotated, on the
-exact published commit, reachable from `main` — without that first tag
+exact published commit, reachable from `master` — without that first tag
 semantic-release would infer a wrong starting version); configuring npm as a
 trusted publisher (npm owner `vmvarela`, repository `opencode-model-aliases`,
 workflow filename `release.yml`, GitHub-hosted runner); and only afterwards
 setting the repository variable `NPM_RELEASE_ENABLED=true`. Subsequent
 releases are derived from Conventional Commits (`fix:` → patch, `feat:` →
 minor, `BREAKING CHANGE:` → major) and tag `v<version>`; the workflow never
-commits to `main`.
+commits to `master`.
 
 Pure config normalization and resolution live in `src/normalize.ts` / `src/resolve.ts`; the
 JSONC config-file loader is `src/config-file.ts`; the OpenCode v2 adapter is `src/plugin.ts`;

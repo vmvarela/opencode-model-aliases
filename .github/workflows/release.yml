@@ -4,7 +4,7 @@ name: Release
 # variable del repo NPM_RELEASE_ENABLED vale "true" (por defecto, sin definir).
 on:
   push:
-    branches: [main]
+    branches: [master]
   workflow_dispatch:
 
 permissions:
@@ -21,7 +21,7 @@ jobs:
     # Disabled: pivote único. Sin la variable definida (UNSET), el job no corre.
     if: >-
       github.repository == 'vmvarela/opencode-model-aliases' &&
-      github.ref == 'refs/heads/main' &&
+      github.ref == 'refs/heads/master' &&
       vars.NPM_RELEASE_ENABLED == 'true'
     permissions:
       contents: write

@@ -80,7 +80,7 @@ const workflow = readFileSync(path.join(ROOT, ".github/workflows/release.yml"), 
 
 // --- Config de release y metadatos del paquete -------------------------------
 await step("config .releaserc.json y metadatos package.json", () => {
-  assert.deepEqual(releaseConfig.branches, ["main"]);
+  assert.deepEqual(releaseConfig.branches, ["master"]);
   assert.ok(!("tagFormat" in releaseConfig) || releaseConfig.tagFormat === `v\${version}`);
   assert.equal(releaseConfig.plugins[0], "@semantic-release/commit-analyzer");
   assert.equal(releaseConfig.plugins[1], "@semantic-release/release-notes-generator");
@@ -95,7 +95,7 @@ await step("config .releaserc.json y metadatos package.json", () => {
       releasedLabels: false,
     },
   ]);
-  // Sin plugin de git ni changelog escrito en main: las notas de GitHub
+  // Sin plugin de git ni changelog escrito en master: las notas de GitHub
   // release sirven de changelog.
   for (const plugin of releaseConfig.plugins) {
     const [name] = Array.isArray(plugin) ? plugin : [plugin];
@@ -125,7 +125,7 @@ await step("config .releaserc.json y metadatos package.json", () => {
 // --- Workflow con compuerta deshabilitada -------------------------------------
 await step("workflow release.yml: compuerta, permisos y credenciales", () => {
   assert.match(workflow, /github\.repository == 'vmvarela\/opencode-model-aliases'/);
-  assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
+  assert.match(workflow, /github\.ref == 'refs\/heads\/master'/);
   // Sin la variable definida (UNSET) el job queda deshabilitado.
   assert.match(workflow, /vars\.NPM_RELEASE_ENABLED == 'true'/);
   assert.match(workflow, /contents: read/);
