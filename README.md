@@ -143,7 +143,7 @@ Per-alias options:
   default. No other strategy is supported yet.
 - `name` — optional non-empty display name. The configured name is used verbatim, even when
   it equals the alias key. Without it, the label is derived deterministically from the alias
-  ID's last path segment (`"sonnet"` → `"Sonnet (floating)"`) and stays stable even when the
+  ID's last path segment (`"sonnet"` → `"Sonnet (alias)"`) and stays stable even when the
   selected target changes.
 
 ## Errors, warnings and logging

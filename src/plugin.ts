@@ -19,7 +19,7 @@ import { ModelAliasesRpc } from "./rpc.js";
 
 const PLUGIN_ID = "opencode-model-aliases";
 const LOG_PREFIX = `[${PLUGIN_ID}]`;
-const FLOATING_SUFFIX = " (floating)";
+const ALIAS_SUFFIX = " (alias)";
 
 type ModelInfo = Model.Info;
 
@@ -36,7 +36,7 @@ interface FloatingEditor {
 /**
  * Nombre visible por defecto, determinista a partir del modelID del alias
  * (último segmento, separadores como espacios, primera letra mayúscula):
- * "sonnet" → "Sonnet (floating)". El name configurado se usa intacto.
+ * "sonnet" → "Sonnet (alias)". El name configurado se usa intacto.
  */
 function defaultAliasName(modelID: string): string {
   const segment = modelID.split("/").pop() ?? "";
@@ -45,7 +45,7 @@ function defaultAliasName(modelID: string): string {
     .filter((word) => word.length > 0)
     .map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1)}`)
     .join(" ");
-  return `${label}${FLOATING_SUFFIX}`;
+  return `${label}${ALIAS_SUFFIX}`;
 }
 
 function displayName(alias: NormalizedAlias): string {

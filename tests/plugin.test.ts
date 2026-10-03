@@ -67,7 +67,7 @@ describe("opencode-model-aliases plugin", () => {
     harness.replay();
     const alias = consumerView.find((m) => m.providerID === "github-copilot" && m.id === "sonnet");
     expect(alias).toBeDefined();
-    expect(alias?.name).toBe("Sonnet (floating)");
+    expect(alias?.name).toBe("Sonnet (alias)");
   });
 
   it("mantiene id estable, name por defecto y el modelID de ejecución del ganador", async () => {
@@ -78,7 +78,7 @@ describe("opencode-model-aliases plugin", () => {
     expect(alias?.id).toBe("sonnet");
     expect(alias?.modelID).toBe("sonnet-4-exec");
     expect(alias?.providerID).toBe("github-copilot");
-    expect(alias?.name).toBe("Sonnet (floating)");
+    expect(alias?.name).toBe("Sonnet (alias)");
   });
 
   it("name configurado se usa intacto aunque coincida con la clave", async () => {
@@ -175,7 +175,7 @@ describe("opencode-model-aliases plugin", () => {
     harness.replay();
     expect(harness.view().get("github-copilot/sonnet")?.modelID).toBe("sonnet-5");
     // La identidad visible no depende del name del ganador.
-    expect(harness.view().get("github-copilot/sonnet")?.name).toBe("Sonnet (floating)");
+    expect(harness.view().get("github-copilot/sonnet")?.name).toBe("Sonnet (alias)");
   });
 
   it("si el objetivo desaparece, el alias se omite con aviso en modo tolerante", async () => {

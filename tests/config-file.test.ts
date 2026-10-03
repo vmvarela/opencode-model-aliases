@@ -128,7 +128,7 @@ describe("separate JSONC config file", () => {
     expect(view.get("anthropic/only-file")?.modelID).toBe("claude-b");
     // Inline: reemplazo completo del registro (sin name heredado del archivo).
     expect(view.get("anthropic/both")?.modelID).toBe("claude-a");
-    expect(view.get("anthropic/both")?.name).toBe("Both (floating)");
+    expect(view.get("anthropic/both")?.name).toBe("Both (alias)");
     // Inline-only.
     expect(view.get("anthropic/only-inline")?.modelID).toBe("claude-b");
   });
@@ -152,7 +152,7 @@ describe("separate JSONC config file", () => {
     expect(Object.keys(inlineAliases)).toEqual(["anthropic/float"]);
     expect(Object.isFrozen(inlineOptions.aliases)).toBe(true);
     // El alias materializado usa el registro inline completo.
-    expect(harness.view().get("anthropic/float")?.name).toBe("Float (floating)");
+    expect(harness.view().get("anthropic/float")?.name).toBe("Float (alias)");
     expect(harness.view().get("anthropic/float")?.modelID).toBe("claude-a");
   });
 
