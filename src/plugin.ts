@@ -7,7 +7,13 @@ import {
 } from "./config.js";
 import { loadConfigFile } from "./config-file.js";
 import { normalizeOptions } from "./normalize.js";
-import { type AliasReportRow, buildRows, formatReport, UNAVAILABLE_REPORT } from "./report.js";
+import {
+  type AliasReportRow,
+  buildInspectRows,
+  buildRows,
+  formatReport,
+  UNAVAILABLE_REPORT,
+} from "./report.js";
 import { resolveLatest } from "./resolve.js";
 import { ModelAliasesRpc } from "./rpc.js";
 
@@ -250,12 +256,12 @@ export default Plugin.define({
             catalog = (await ctx.model.list()).data;
           } catch {
             // El refresco falló: ni el snapshot previo ni uno parcial; texto de
-            // indisponibilidad.
-            return { text: UNAVAILABLE_REPORT };
+            // indisponibilidad y rows vacío.
+            return { text: UNAVAILABLE_REPORT, rows: [] };
           }
           const snapshot = reportRows;
           if (snapshot === null) {
-            return { text: UNAVAILABLE_REPORT };
+            return { text: UNAVAILABLE_REPORT, rows: [] };
           }
           // Visibilidad final por primitivas: un alias deshabilitado por una
           // política posterior no se etiqueta como activo; un alias retirado
@@ -276,10 +282,13 @@ export default Plugin.define({
             if (row.status !== "resolved" || !visible.has(row.key)) continue;
             const selected = row.wireModelID ?? row.catalogID;
             if (wire.get(row.key) !== selected) {
-              return { text: UNAVAILABLE_REPORT };
+              return { text: UNAVAILABLE_REPORT, rows: [] };
             }
           }
-          return { text: formatReport(snapshot, visible) };
+          return {
+            text: formatReport(snapshot, visible),
+            rows: buildInspectRows(snapshot, visible),
+          };
         },
       });
     } catch (error) {

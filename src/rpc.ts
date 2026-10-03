@@ -14,8 +14,31 @@ export const ModelAliasesRpc = {
       input: { type: "object", properties: {}, additionalProperties: false },
       output: {
         type: "object",
-        properties: { text: { type: "string" } },
-        required: ["text"],
+        properties: {
+          text: { type: "string" },
+          rows: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                key: { type: "string" },
+                provider: { type: "string" },
+                alias: { type: "string" },
+                strategy: { type: "string", enum: ["latest"] },
+                status: { type: "string", enum: ["active", "inactive", "unresolved"] },
+                target: { type: "string" },
+                catalogID: { type: "string" },
+                providerID: { type: "string" },
+                wireModelID: { type: "string" },
+                failureKind: { type: "string" },
+                failureReason: { type: "string" },
+              },
+              required: ["key", "provider", "alias", "strategy", "status"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["text", "rows"],
         additionalProperties: false,
       },
     },

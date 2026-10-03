@@ -303,6 +303,9 @@ describe("separate JSONC config file", () => {
     expect(harness.rpc.definitions).toHaveLength(1);
     expect(harness.rpc.registrations[0]?.disposed).toBe(false);
     const text = await harness.inspect();
-    expect(text).toContain("anthropic/float → anthropic/claude-b (active)");
+    // Sección del proveedor con el par alias→target exacto.
+    expect(text).toContain("anthropic\n  float\n    → claude-b");
+    // El estado activo se resume en la cabecera, no por alias.
+    expect(text).toContain("1 alias · 1 active");
   });
 });

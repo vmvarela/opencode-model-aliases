@@ -171,12 +171,13 @@ Per-alias options:
 
 The plugin registers a single RPC (`opencode-model-aliases`, method `inspect`) that renders
 the current alias mapping without ever calling a model. Type `/model-aliases` in the composer,
-or select **Model aliases** from the command palette. A local dialog shows,
-for every configured alias, the actually selected target in the final catalog
-(`provider/catalogID`), the wire `modelID` separately when it differs from the catalog ID,
-and — for tolerant unresolved aliases — the failure kind and reason. Resolved aliases are
-labeled `active` only when they are still visible and enabled in the final catalog (a later
-policy can remove or disable a materialized alias).
+or select **Model aliases** from the command palette. In the TUI, this opens an interactive,
+scrollable selection list grouped by provider category. Each row shows the alias name and
+its selected target (or unresolved status), without noisy active tags. Selecting any alias
+opens a concise detail view showing its full alias key, canonical target, execution wire
+`modelID` (when it differs from the catalog ID), selection strategy, and status or failure
+reason. Cancelling the selection is a clean no-op. When no aliases are configured or inspection
+is unavailable, a brief native message dialog is shown.
 
 In OpenCode 2.0.22, selecting the slash suggestion completes `/model-aliases `;
 press Enter again to open the report. This completion step is host behavior.
@@ -195,9 +196,11 @@ In a server-only setup (no TUI), the same report is available through the OpenCo
 opencode api --standalone post /api/rpc/opencode-model-aliases/inspect --data '{"input":{}}'
 ```
 
-The success body is `{"output": {"text": "<report>"}}`. Public IDs and reasons are sanitized
-(control characters are escaped). Inspection reads the current catalog, which can replay
-transforms if invalidated; it never requests model generation or submits session messages.
+The success body is `{"output": {"text": "<report>", "rows": [...]}}`. The `text` field provides
+the provider-grouped, human-readable outline with a compact summary, while `rows` contains
+structured public primitives for each alias. Public IDs and reasons are sanitized (control
+characters are escaped). Inspection reads the current catalog, which can replay transforms if
+invalidated; it never requests model generation or submits session messages.
 
 ## Limitations
 
@@ -261,8 +264,8 @@ always cleaned up.
 `--inspect` flag: instead of a real session it verifies the actual
 `opencode api` CLI shape and then calls the plugin's RPC through the host's
 real HTTP surface (`post /api/rpc/opencode-model-aliases/inspect` with
-`{"input":{}}`), asserting the report shows
-`localfake/latest → localfake/fake-large (active)` with strategy latest and
+`{"input":{}}`), asserting the report reflects the resolved target under its
+provider section with strategy latest and
 **zero** provider requests observed by the loopback sink — inspection performs
 no model call and no session execution.
 

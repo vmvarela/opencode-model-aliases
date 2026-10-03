@@ -9,17 +9,79 @@ const USAGE_MESSAGE =
   "Unexpected arguments. Use /model-aliases without arguments to view configured model aliases.";
 const ERROR_MESSAGE = "Unable to load model aliases. Please reload or try again.";
 
-interface InspectResponse {
-  readonly text: string;
+export interface InspectResponseRow {
+  readonly key: string;
+  readonly provider: string;
+  readonly alias: string;
+  readonly strategy: "latest";
+  readonly status: "active" | "inactive" | "unresolved";
+  readonly target?: string;
+  readonly catalogID?: string;
+  readonly providerID?: string;
+  readonly wireModelID?: string;
+  readonly failureKind?: string;
+  readonly failureReason?: string;
 }
 
-function isInspectResponse(value: unknown): value is InspectResponse {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "text" in value &&
-    typeof (value as { text: unknown }).text === "string"
-  );
+export interface InspectResponse {
+  readonly text: string;
+  readonly rows: readonly InspectResponseRow[];
+}
+
+function isInspectRow(value: unknown): value is InspectResponseRow {
+  if (typeof value !== "object" || value === null) return false;
+  const row = value as Record<string, unknown>;
+  if (
+    typeof row.key !== "string" ||
+    typeof row.provider !== "string" ||
+    typeof row.alias !== "string" ||
+    row.strategy !== "latest" ||
+    (row.status !== "active" && row.status !== "inactive" && row.status !== "unresolved")
+  ) {
+    return false;
+  }
+  if (row.target !== undefined && typeof row.target !== "string") return false;
+  if (row.catalogID !== undefined && typeof row.catalogID !== "string") return false;
+  if (row.providerID !== undefined && typeof row.providerID !== "string") return false;
+  if (row.wireModelID !== undefined && typeof row.wireModelID !== "string") return false;
+  if (row.failureKind !== undefined && typeof row.failureKind !== "string") return false;
+  if (row.failureReason !== undefined && typeof row.failureReason !== "string") return false;
+  return true;
+}
+
+export function isInspectResponse(value: unknown): value is InspectResponse {
+  if (typeof value !== "object" || value === null) return false;
+  const res = value as Record<string, unknown>;
+  if (typeof res.text !== "string" || !Array.isArray(res.rows)) return false;
+  return res.rows.every(isInspectRow);
+}
+
+export function formatDetailMessage(row: InspectResponseRow): string {
+  const lines: string[] = [`Alias: ${row.key}`];
+
+  if (row.status === "unresolved") {
+    lines.push(`Strategy: ${row.strategy}`);
+    const kind = row.failureKind ? ` (${row.failureKind})` : "";
+    lines.push(`Status: unresolved${kind}`);
+    if (row.failureReason) {
+      lines.push(`Reason: ${row.failureReason}`);
+    }
+  } else {
+    const target =
+      row.providerID && row.providerID !== row.provider && row.target
+        ? `${row.providerID}/${row.target}`
+        : (row.target ?? row.catalogID ?? "");
+    lines.push(`Target: ${row.provider}/${target}`);
+    if (row.wireModelID !== undefined && row.wireModelID !== row.catalogID) {
+      lines.push(`Wire model ID: ${row.wireModelID}`);
+    }
+    lines.push(`Strategy: ${row.strategy}`);
+    lines.push(
+      row.status === "active" ? "Status: active" : "Status: inactive (not in final catalog)",
+    );
+  }
+
+  return lines.join("\n");
 }
 
 const plugin = {
@@ -46,16 +108,65 @@ const plugin = {
 
         try {
           const response = await context.client.rpc(ModelAliasesRpc).inspect({}, { location });
-          if (isInspectResponse(response)) {
+          if (!isInspectResponse(response)) {
+            await context.ui.dialog.alert({
+              title: COMMAND_TITLE,
+              message: ERROR_MESSAGE,
+            });
+            return;
+          }
+
+          if (response.rows.length === 0) {
             await context.ui.dialog.alert({
               title: COMMAND_TITLE,
               message: response.text,
             });
             return;
           }
-          await context.ui.dialog.alert({
+
+          const options = response.rows.map((row) => {
+            let description: string;
+            if (row.status === "unresolved") {
+              const kind = row.failureKind ?? "unresolved";
+              description = row.failureReason ? `${kind}: ${row.failureReason}` : kind;
+            } else {
+              description = row.target ?? row.catalogID ?? "";
+            }
+
+            let footer: string | undefined;
+            if (row.status === "inactive") {
+              footer = "inactive";
+            } else if (row.status === "unresolved") {
+              footer = "unresolved";
+            }
+
+            return {
+              category: row.provider,
+              title: row.alias,
+              description,
+              ...(footer !== undefined ? { footer } : {}),
+              value: row.key,
+            };
+          });
+
+          const selectedKey = await context.ui.dialog.select({
             title: COMMAND_TITLE,
-            message: ERROR_MESSAGE,
+            placeholder: "Filter aliases...",
+            options,
+          });
+
+          if (selectedKey === undefined) {
+            return;
+          }
+
+          const selectedRow = response.rows.find((r) => r.key === selectedKey);
+          if (!selectedRow) {
+            return;
+          }
+
+          await context.ui.dialog.alert({
+            title: `${COMMAND_TITLE}: ${selectedRow.alias}`,
+            message: formatDetailMessage(selectedRow),
           });
         } catch {
           await context.ui.dialog.alert({

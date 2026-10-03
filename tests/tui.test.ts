@@ -1,7 +1,7 @@
 import type { Plugin } from "@opencode/plugin/tui";
 import { describe, expect, it, vi } from "vitest";
 import { ModelAliasesRpc } from "../src/rpc.js";
-import plugin from "../src/tui.js";
+import plugin, { type InspectResponseRow } from "../src/tui.js";
 
 interface KeymapCommand {
   id?: string;
@@ -32,6 +32,20 @@ interface SlotClaim {
   render: () => null;
 }
 
+interface SelectOption {
+  category?: string;
+  title: string;
+  description?: string;
+  footer?: string;
+  value: string;
+}
+
+interface SelectCall {
+  title: string;
+  placeholder?: string;
+  options: SelectOption[];
+}
+
 interface StrictContextOptions {
   location?: { directory: string } | undefined;
   defaultLocation?: { directory: string } | undefined;
@@ -41,16 +55,106 @@ interface StrictContextOptions {
         options?: { location?: unknown } | undefined,
       ) => Promise<unknown>)
     | undefined;
+  selectReturnValue?: string | undefined;
 }
+
+const SAMPLE_ROW_ACTIVE: InspectResponseRow = {
+  key: "github-copilot/sonnet",
+  provider: "github-copilot",
+  alias: "sonnet",
+  strategy: "latest",
+  status: "active",
+  target: "claude-3-5-sonnet-20241022",
+  catalogID: "claude-3-5-sonnet-20241022",
+  providerID: "github-copilot",
+};
+
+const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
+  {
+    key: "github-copilot/gemini-flash",
+    provider: "github-copilot",
+    alias: "gemini-flash",
+    strategy: "latest",
+    status: "active",
+    target: "gemini-2.5-flash",
+    catalogID: "gemini-2.5-flash",
+  },
+  {
+    key: "github-copilot/sonnet",
+    provider: "github-copilot",
+    alias: "sonnet",
+    strategy: "latest",
+    status: "active",
+    target: "claude-3-5-sonnet-20241022",
+    catalogID: "claude-3-5-sonnet-20241022",
+    wireModelID: "sonnet-4-exec",
+  },
+  {
+    key: "openai/gpt-luna",
+    provider: "openai",
+    alias: "gpt-luna",
+    strategy: "latest",
+    status: "active",
+    target: "gpt-4o-mini-2024-07-18",
+    catalogID: "gpt-4o-mini-2024-07-18",
+  },
+  {
+    key: "openai/gpt-sol",
+    provider: "openai",
+    alias: "gpt-sol",
+    strategy: "latest",
+    status: "active",
+    target: "o1-preview",
+    catalogID: "o1-preview",
+  },
+  {
+    key: "openai/gpt-terra",
+    provider: "openai",
+    alias: "gpt-terra",
+    strategy: "latest",
+    status: "active",
+    target: "gpt-4o-2024-11-20",
+    catalogID: "gpt-4o-2024-11-20",
+  },
+  {
+    key: "opencode-go/deepseek-flash",
+    provider: "opencode-go",
+    alias: "deepseek-flash",
+    strategy: "latest",
+    status: "active",
+    target: "deepseek-v3-flash",
+    catalogID: "deepseek-v3-flash",
+  },
+  {
+    key: "opencode-go/glm-flash",
+    provider: "opencode-go",
+    alias: "glm-flash",
+    strategy: "latest",
+    status: "inactive",
+    target: "glm-4-flash",
+    catalogID: "glm-4-flash",
+  },
+  {
+    key: "opencode-go/qwen-flash",
+    provider: "opencode-go",
+    alias: "qwen-flash",
+    strategy: "latest",
+    status: "unresolved",
+    failureKind: "no-eligible",
+    failureReason: "no candidate matched pattern",
+  },
+];
 
 function createStrictContext(options?: StrictContextOptions) {
   const registeredLayers: Array<() => KeymapLayer> = [];
   const returnedLayers: KeymapLayer[] = [];
   const activeCommands: KeymapCommand[] = [];
   const alerts: Array<{ title: string; message: string }> = [];
+  const selectCalls: SelectCall[] = [];
   const inspectCalls: Array<{ input: unknown; options?: unknown }> = [];
 
   const defaultLoc = options?.defaultLocation ?? { directory: "/default/workspace" };
+  let simulatedSelectReturn: string | undefined = options?.selectReturnValue;
 
   let slotDisposed = false;
   let activeAppRender: (() => null) | null = null;
@@ -86,7 +190,12 @@ function createStrictContext(options?: StrictContextOptions) {
     },
   };
 
-  const inspectHandler = options?.inspectHandler ?? (async () => ({ text: "Report text" }));
+  const inspectHandler =
+    options?.inspectHandler ??
+    (async () => ({
+      text: "Report text",
+      rows: [SAMPLE_ROW_ACTIVE],
+    }));
 
   const client = {
     rpc: vi.fn((definition: unknown) => {
@@ -133,6 +242,11 @@ function createStrictContext(options?: StrictContextOptions) {
     alerts.push(opts);
   });
 
+  const selectSpy = vi.fn(async (opts: SelectCall) => {
+    selectCalls.push(opts);
+    return simulatedSelectReturn;
+  });
+
   const slotImpl = vi.fn((claim: SlotClaim) => {
     if (claim.append === "app") {
       activeAppRender = claim.render;
@@ -149,12 +263,12 @@ function createStrictContext(options?: StrictContextOptions) {
     slot: slotImpl,
     dialog: {
       alert: alertSpy,
+      select: selectSpy,
       show: forbiddenProxy("ui.dialog.show"),
       set: forbiddenProxy("ui.dialog.set"),
       clear: forbiddenProxy("ui.dialog.clear"),
       confirm: forbiddenProxy("ui.dialog.confirm"),
       prompt: forbiddenProxy("ui.dialog.prompt"),
-      select: forbiddenProxy("ui.dialog.select"),
     },
     toast: forbiddenProxy("ui.toast"),
     router: forbiddenProxy("ui.router"),
@@ -188,12 +302,17 @@ function createStrictContext(options?: StrictContextOptions) {
     data,
     ui,
     alertSpy,
+    selectSpy,
     defaultLocationSpy,
     slotImpl,
     alerts,
+    selectCalls,
     inspectCalls,
     activeCommands,
     returnedLayers,
+    setSelectReturn: (val: string | undefined) => {
+      simulatedSelectReturn = val;
+    },
     remountSlot: () => {
       activeCommands.length = 0;
       if (activeAppRender) {
@@ -204,20 +323,16 @@ function createStrictContext(options?: StrictContextOptions) {
   };
 }
 
-describe("opencode-model-aliases TUI plugin", () => {
-  it("satisfies Plugin.Definition and loads without Solid/DOM renderer dependencies", () => {
-    expect(plugin.id).toBe("opencode-model-aliases");
-    expect(typeof plugin.setup).toBe("function");
-  });
-
-  it("claims the app slot via context.ui.slot and registers discoverable command on slot render", () => {
+describe("TUI slash and command palette registration", () => {
+  it("registers a single command under slot append:app and keymap mode:global", () => {
     const harness = createStrictContext();
-    const cleanup = plugin.setup(harness.context);
+    plugin.setup(harness.context);
 
     expect(harness.slotImpl).toHaveBeenCalledTimes(1);
-    expect(harness.slotImpl).toHaveBeenCalledWith(expect.objectContaining({ append: "app" }));
-
+    expect(harness.returnedLayers).toHaveLength(1);
+    expect(harness.returnedLayers[0]?.mode).toBe("global");
     expect(harness.activeCommands).toHaveLength(1);
+
     const command = harness.activeCommands[0];
     expect(command?.id).toBe("opencode-model-aliases.inspect");
     expect(command?.title).toBe("Model aliases");
@@ -226,74 +341,123 @@ describe("opencode-model-aliases TUI plugin", () => {
       name: "model-aliases",
       arguments: true,
     });
-    expect(typeof command?.run).toBe("function");
+  });
 
-    expect(harness.returnedLayers).toHaveLength(1);
-    expect(harness.returnedLayers[0]?.mode).toBe("global");
+  it("registers identically when the slot re-renders on catalog or theme update", () => {
+    const harness = createStrictContext();
+    plugin.setup(harness.context);
 
+    expect(harness.activeCommands).toHaveLength(1);
+    harness.remountSlot();
+    expect(harness.activeCommands).toHaveLength(1);
+    expect(harness.activeCommands[0]?.id).toBe("opencode-model-aliases.inspect");
+  });
+
+  it("unregisters command when the slot cleanup runs", () => {
+    const harness = createStrictContext();
+    const cleanup = plugin.setup(harness.context);
+
+    expect(harness.activeCommands).toHaveLength(1);
     if (typeof cleanup === "function") {
       cleanup();
     }
+    expect(harness.isSlotDisposed()).toBe(true);
+    expect(harness.activeCommands).toHaveLength(0);
   });
+});
 
-  it("forwards explicit context.location to inspect RPC", async () => {
-    const harness = createStrictContext({
-      location: { directory: "/explicit/project" },
-    });
-    plugin.setup(harness.context);
-    const command = harness.activeCommands[0];
-    expect(command).toBeDefined();
-
-    await command?.run();
-
-    expect(harness.inspectCalls).toHaveLength(1);
-    expect(harness.inspectCalls[0]).toEqual({
-      input: {},
-      options: { location: { directory: "/explicit/project" } },
-    });
-    expect(harness.defaultLocationSpy).not.toHaveBeenCalled();
-  });
-
-  it("falls back to context.data.location.default() when context.location is undefined", async () => {
-    const harness = createStrictContext({
-      location: undefined,
-      defaultLocation: { directory: "/fallback/default" },
-    });
-    plugin.setup(harness.context);
-    const command = harness.activeCommands[0];
-    expect(command).toBeDefined();
-
-    await command?.run();
-
-    expect(harness.defaultLocationSpy).toHaveBeenCalledTimes(1);
-    expect(harness.inspectCalls).toHaveLength(1);
-    expect(harness.inspectCalls[0]).toEqual({
-      input: {},
-      options: { location: { directory: "/fallback/default" } },
-    });
-  });
-
-  it("strictly touches only inspection RPC and context.ui.dialog.alert without forbidden APIs", async () => {
-    const harness = createStrictContext({
-      location: { directory: "/isolated" },
-      inspectHandler: async () => ({ text: "Aliases active:\n  sonnet -> sonnet-4" }),
-    });
-    plugin.setup(harness.context);
-    const command = harness.activeCommands[0];
-
-    await command?.run();
-
-    expect(harness.inspectCalls).toHaveLength(1);
-    expect(harness.alerts).toEqual([
-      { title: "Model aliases", message: "Aliases active:\n  sonnet -> sonnet-4" },
-    ]);
-  });
-
-  it("presents the report text in dialog alert on valid response", async () => {
+describe("TUI dialog navigation: select list and detail view", () => {
+  it("renders searchable native dialog.select with provider categories for actual 8 aliases", async () => {
     const harness = createStrictContext({
       inspectHandler: async () => ({
-        text: "Configured aliases:\n  fast: gpt-4o-mini\n  smart: claude-3-7-sonnet",
+        text: "Summary text",
+        rows: SAMPLE_ACTUAL8_ROWS,
       }),
+      selectReturnValue: undefined, // Simula cancelación
+    });
+    plugin.setup(harness.context);
+    const command = harness.activeCommands[0];
+
+    await command?.run();
+
+    expect(harness.selectSpy).toHaveBeenCalledTimes(1);
+    const call = harness.selectCalls[0];
+    expect(call?.title).toBe("Model aliases");
+    expect(call?.options).toHaveLength(8);
+
+    // Verificación de categorías por proveedor
+    const categories = call?.options.map((o) => o.category);
+    expect(categories).toEqual([
+      "github-copilot",
+      "github-copilot",
+      "openai",
+      "openai",
+      "openai",
+      "opencode-go",
+      "opencode-go",
+      "opencode-go",
+    ]);
+
+    // Verificación de títulos compactos (sin prefijo de proveedor)
+    expect(call?.options.map((o) => o.title)).toEqual([
+      "gemini-flash",
+      "sonnet",
+      "gpt-luna",
+      "gpt-sol",
+      "gpt-terra",
+      "deepseek-flash",
+      "glm-flash",
+      "qwen-flash",
+    ]);
+
+    // Ninguna fila activa lleva etiqueta redundante (active)
+    const activeSonnet = call?.options.find((o) => o.value === "github-copilot/sonnet");
+    expect(activeSonnet?.footer).toBeUndefined();
+
+    // Las filas con problemas marcan su pie distintivamente
+    const inactiveGlm = call?.options.find((o) => o.value === "opencode-go/glm-flash");
+    expect(inactiveGlm?.footer).toBe("inactive");
+
+    const unresolvedQwen = call?.options.find((o) => o.value === "opencode-go/qwen-flash");
+    expect(unresolvedQwen?.footer).toBe("unresolved");
+    expect(unresolvedQwen?.description).toContain("no-eligible");
+
+    // Cancelar el select es un no-op (no abre alert posterior)
+    expect(harness.alerts).toHaveLength(0);
+  });
+
+  it("seleccionar un alias abre el diálogo de detalle con canonical target y wire model ID si difiere", async () => {
+    const harness = createStrictContext({
+      inspectHandler: async () => ({
+        text: "Summary text",
+        rows: SAMPLE_ACTUAL8_ROWS,
+      }),
+      selectReturnValue: "github-copilot/sonnet",
+    });
+    plugin.setup(harness.context);
+    const command = harness.activeCommands[0];
+
+    await command?.run();
+
+    expect(harness.selectSpy).toHaveBeenCalledTimes(1);
+    expect(harness.alertSpy).toHaveBeenCalledTimes(1);
+
+    const alert = harness.alerts[0];
+    expect(alert?.title).toBe("Model aliases: sonnet");
+    expect(alert?.message).toContain("Alias: github-copilot/sonnet");
+    expect(alert?.message).toContain("Target: github-copilot/claude-3-5-sonnet-20241022");
+    expect(alert?.message).toContain("Wire model ID: sonnet-4-exec");
+    expect(alert?.message).toContain("Strategy: latest");
+    expect(alert?.message).toContain("Status: active");
+  });
+
+  it("seleccionar un alias sin wireID distinto no muestra la línea Wire model ID", async () => {
+    const harness = createStrictContext({
+      inspectHandler: async () => ({
+        text: "Summary text",
+        rows: SAMPLE_ACTUAL8_ROWS,
+      }),
+      selectReturnValue: "openai/gpt-terra",
     });
     plugin.setup(harness.context);
     const command = harness.activeCommands[0];
@@ -301,32 +465,143 @@ describe("opencode-model-aliases TUI plugin", () => {
     await command?.run();
 
     expect(harness.alertSpy).toHaveBeenCalledTimes(1);
-    expect(harness.alerts[0]).toEqual({
-      title: "Model aliases",
-      message: "Configured aliases:\n  fast: gpt-4o-mini\n  smart: claude-3-7-sonnet",
-    });
+    const alert = harness.alerts[0];
+    expect(alert?.title).toBe("Model aliases: gpt-terra");
+    expect(alert?.message).toContain("Alias: openai/gpt-terra");
+    expect(alert?.message).toContain("Target: openai/gpt-4o-2024-11-20");
+    expect(alert?.message).not.toContain("Wire model ID");
   });
 
-  it("allows palette invocation (undefined) and empty slash invocation ('', '   ')", async () => {
+  it("seleccionar un alias inactivo destaca su estado inactivo en el detalle", async () => {
     const harness = createStrictContext({
-      inspectHandler: async () => ({ text: "Report OK" }),
+      inspectHandler: async () => ({
+        text: "Summary text",
+        rows: SAMPLE_ACTUAL8_ROWS,
+      }),
+      selectReturnValue: "opencode-go/glm-flash",
     });
     plugin.setup(harness.context);
     const command = harness.activeCommands[0];
 
-    await command?.run(undefined);
+    await command?.run();
+
+    expect(harness.alertSpy).toHaveBeenCalledTimes(1);
+    const alert = harness.alerts[0];
+    expect(alert?.title).toBe("Model aliases: glm-flash");
+    expect(alert?.message).toContain("Status: inactive (not in final catalog)");
+  });
+
+  it("seleccionar un alias sin resolver muestra fallo y razón detallada", async () => {
+    const harness = createStrictContext({
+      inspectHandler: async () => ({
+        text: "Summary text",
+        rows: SAMPLE_ACTUAL8_ROWS,
+      }),
+      selectReturnValue: "opencode-go/qwen-flash",
+    });
+    plugin.setup(harness.context);
+    const command = harness.activeCommands[0];
+
+    await command?.run();
+
+    expect(harness.alertSpy).toHaveBeenCalledTimes(1);
+    const alert = harness.alerts[0];
+    expect(alert?.title).toBe("Model aliases: qwen-flash");
+    expect(alert?.message).toContain("Status: unresolved (no-eligible)");
+    expect(alert?.message).toContain("Reason: no candidate matched pattern");
+  });
+
+  it("cuando no hay aliases configurados (rows:[]) abre alert nativo con el texto estático", async () => {
+    const harness = createStrictContext({
+      inspectHandler: async () => ({
+        text: "No aliases configured.",
+        rows: [],
+      }),
+    });
+    plugin.setup(harness.context);
+    const command = harness.activeCommands[0];
+
+    await command?.run();
+
+    expect(harness.selectSpy).not.toHaveBeenCalled();
+    expect(harness.alertSpy).toHaveBeenCalledTimes(1);
+    expect(harness.alerts[0]).toEqual({
+      title: "Model aliases",
+      message: "No aliases configured.",
+    });
+  });
+
+  it("cuando el informe está indisponible (rows:[]) abre alert nativo breve con el texto estático", async () => {
+    const harness = createStrictContext({
+      inspectHandler: async () => ({
+        text: "Model alias inspection is unavailable: the current alias mapping could not be confirmed against the final catalog.",
+        rows: [],
+      }),
+    });
+    plugin.setup(harness.context);
+    const command = harness.activeCommands[0];
+
+    await command?.run();
+
+    expect(harness.selectSpy).not.toHaveBeenCalled();
+    expect(harness.alertSpy).toHaveBeenCalledTimes(1);
+    expect(harness.alerts[0]?.message).toMatch(/unavailable/i);
+  });
+});
+
+describe("TUI security, validation, and error boundaries", () => {
+  it("strictly touches only inspection RPC, dialog.select and dialog.alert without forbidden APIs", async () => {
+    const harness = createStrictContext({
+      location: { directory: "/isolated" },
+      inspectHandler: async () => ({
+        text: "Aliases active:\n  sonnet -> sonnet-4",
+        rows: [SAMPLE_ROW_ACTIVE],
+      }),
+      selectReturnValue: "github-copilot/sonnet",
+    });
+    plugin.setup(harness.context);
+    const command = harness.activeCommands[0];
+
+    await command?.run();
+
     expect(harness.inspectCalls).toHaveLength(1);
+    expect(harness.selectSpy).toHaveBeenCalledTimes(1);
+    expect(harness.alertSpy).toHaveBeenCalledTimes(1);
+  });
 
-    await command?.run("");
-    expect(harness.inspectCalls).toHaveLength(2);
+  it("passes explicit location when context provides location", async () => {
+    const harness = createStrictContext({
+      location: { directory: "/custom/workdir" },
+      inspectHandler: async () => ({ text: "ok", rows: [] }),
+    });
+    plugin.setup(harness.context);
+    const command = harness.activeCommands[0];
 
-    await command?.run("    ");
-    expect(harness.inspectCalls).toHaveLength(3);
+    await command?.run();
 
-    expect(harness.alerts).toHaveLength(3);
-    for (const alert of harness.alerts) {
-      expect(alert).toEqual({ title: "Model aliases", message: "Report OK" });
-    }
+    expect(harness.defaultLocationSpy).not.toHaveBeenCalled();
+    expect(harness.inspectCalls[0]).toEqual({
+      input: {},
+      options: { location: { directory: "/custom/workdir" } },
+    });
+  });
+
+  it("falls back to data.location.default() when context.location is omitted", async () => {
+    const harness = createStrictContext({
+      location: undefined,
+      defaultLocation: { directory: "/fallback/default" },
+      inspectHandler: async () => ({ text: "ok", rows: [] }),
+    });
+    plugin.setup(harness.context);
+    const command = harness.activeCommands[0];
+
+    await command?.run();
+
+    expect(harness.defaultLocationSpy).toHaveBeenCalledTimes(1);
+    expect(harness.inspectCalls[0]).toEqual({
+      input: {},
+      options: { location: { directory: "/fallback/default" } },
+    });
   });
 
   it("rejects unexpected arguments via local usage dialog without calling RPC", async () => {
@@ -346,13 +621,15 @@ describe("opencode-model-aliases TUI plugin", () => {
     expect(harness.alerts).toHaveLength(2);
   });
 
-  it("displays grounded retry/reload advice dialog when response is malformed", async () => {
+  it("displays grounded retry/reload advice dialog when response is malformed or rows invalid", async () => {
     for (const malformed of [
       null,
       undefined,
       {},
       { text: 123 },
-      { different: "shape" },
+      { text: "ok", rows: "not-an-array" },
+      { text: "ok", rows: [{ invalid: "row" }] },
+      { text: "ok", rows: [{ key: 123 }] },
       "not an object",
     ]) {
       const harness = createStrictContext({
@@ -387,21 +664,5 @@ describe("opencode-model-aliases TUI plugin", () => {
       "Unable to load model aliases. Please reload or try again.",
     );
     expect(harness.alerts[0]?.message).not.toContain("SECRET_TOKEN");
-  });
-
-  it("cleans up on teardown and does not duplicate keymap commands on remount", () => {
-    const harness = createStrictContext();
-    const cleanup = plugin.setup(harness.context);
-
-    expect(harness.activeCommands).toHaveLength(1);
-
-    harness.remountSlot();
-    expect(harness.activeCommands).toHaveLength(1);
-
-    if (typeof cleanup === "function") {
-      cleanup();
-    }
-    expect(harness.isSlotDisposed()).toBe(true);
-    expect(harness.activeCommands).toHaveLength(0);
   });
 });

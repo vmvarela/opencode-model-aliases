@@ -491,24 +491,51 @@ async function main() {
         body = null;
       }
       const reportText = body?.output?.text;
-      if (typeof reportText !== "string") {
+      const reportRows = body?.output?.rows;
+      if (typeof reportText !== "string" || !Array.isArray(reportRows)) {
         problems.push(
-          `inspect response was not {output:{text:string}}; raw (first 400): ${JSON.stringify(
+          `inspect response was not {output:{text:string,rows:array}}; raw (first 400): ${JSON.stringify(
             (api.stdout + api.stderr).slice(0, 400),
           )}`,
         );
       } else {
-        if (!reportText.includes(`${ALIAS_KEY} → ${PROVIDER}/${TARGET} (active)`)) {
+        // La sección del proveedor muestra el par alias→target; el alias
+        // corto se deriva de la clave de configuración.
+        const aliasName = ALIAS_KEY.split("/").pop();
+        if (!reportText.includes(`${PROVIDER}\n  ${aliasName}\n    → ${TARGET}`)) {
           problems.push(`inspect report did not show the active alias target; got:\n${reportText}`);
+        }
+        if (!reportText.includes("1 alias · 1 active")) {
+          problems.push(`inspect report did not summarize one active alias; got:\n${reportText}`);
         }
         if (!reportText.includes("strategy: latest")) {
           problems.push("inspect report did not mention the latest strategy");
         }
         // El catálogo id === wire modelID en este entorno: sin mención wire.
-        if (reportText.includes("wire modelID")) {
+        if (reportText.includes("wire model ID") || reportText.includes("wire modelID")) {
           problems.push(
             "inspect report mentioned a wire modelID although catalog id === wire modelID",
           );
+        }
+
+        const matchedRow = reportRows.find((r) => r.key === ALIAS_KEY);
+        if (!matchedRow) {
+          problems.push(`inspect report rows did not include alias "${ALIAS_KEY}"`);
+        } else {
+          if (matchedRow.status !== "active") {
+            problems.push(`expected row status "active", got "${matchedRow.status}"`);
+          }
+          if (matchedRow.provider !== PROVIDER) {
+            problems.push(`expected row provider "${PROVIDER}", got "${matchedRow.provider}"`);
+          }
+          if (matchedRow.alias !== aliasName) {
+            problems.push(`expected row alias "${aliasName}", got "${matchedRow.alias}"`);
+          }
+          if (matchedRow.target !== TARGET && matchedRow.catalogID !== TARGET) {
+            problems.push(
+              `expected row target "${TARGET}", got "${matchedRow.target ?? matchedRow.catalogID}"`,
+            );
+          }
         }
       }
 
