@@ -11,6 +11,11 @@ import { failure, type ResolveFailure } from "./errors.js";
 const DEFAULT_STATUSES: readonly AllowedStatus[] = ["active"];
 const ALLOWED_STATUSES: ReadonlySet<string> = new Set(["active", "alpha", "beta"]);
 
+/** Claves admitidas por nivel de configuración; el resto es errata y se rechaza. */
+const ROOT_KEYS: readonly string[] = ["aliases", "strict", "debug"];
+const ALIAS_KEYS: readonly string[] = ["match", "exclude", "filter", "select", "name"];
+const FILTER_KEYS: readonly string[] = ["status"];
+
 /**
  * Semántica única de compilación y matching. `strictBrackets` rechaza
  * corchetes desbalanceados y `debug: true` obliga a picomatch a lanzar al
@@ -51,6 +56,17 @@ export function isLiteralProvider(provider: string): boolean {
 
 function prefix(fail: ResolveFailure, context: string): ResolveFailure {
   return failure(fail.kind, `${context}: ${fail.reason}`);
+}
+
+/** Claves propias enumerables fuera de la lista admitida. */
+function unknownKeys(value: Record<string, unknown>, supported: readonly string[]): string[] {
+  const allowed = new Set(supported);
+  return Object.keys(value).filter((key) => !allowed.has(key));
+}
+
+/** Motivo uniforme para claves no reconocidas: siempre nombra la errata. */
+function unsupportedKeysMessage(keys: readonly string[], supported: readonly string[]): string {
+  return `unsupported key(s): ${keys.join(", ")} (supported: ${supported.join(", ")})`;
 }
 
 /** Compila un glob totalmente cualificado validando estrictamente; nunca lanza. */
@@ -136,9 +152,12 @@ function normalizeSelect(value: unknown, context: string): { strategy: "latest" 
   if (value.strategy !== "latest") {
     return failure("parse-error", `${context}: select.strategy must be "latest"`);
   }
-  const extra = Object.keys(value).filter((k) => k !== "strategy");
+  const extra = unknownKeys(value, ["strategy"]);
   if (extra.length > 0) {
-    return failure("parse-error", `${context}: select has unsupported key(s): ${extra.join(", ")}`);
+    return failure(
+      "parse-error",
+      `${context}: select ${unsupportedKeysMessage(extra, ["strategy"])}`,
+    );
   }
   return { strategy: "latest" };
 }
@@ -156,12 +175,25 @@ function normalizeAlias(key: string, value: unknown): NormalizedAlias | ResolveF
   if (!isPlainObject(value)) {
     return failure("parse-error", `${context}: must be an object`);
   }
+  const aliasExtras = unknownKeys(value, ALIAS_KEYS);
+  if (aliasExtras.length > 0) {
+    return failure("parse-error", `${context}: ${unsupportedKeysMessage(aliasExtras, ALIAS_KEYS)}`);
+  }
   if (value.match === undefined) {
     return failure("parse-error", `${context}: match is required`);
   }
   const filter = value.filter;
   if (filter !== undefined && !isPlainObject(filter)) {
     return failure("parse-error", `${context}: filter must be an object`);
+  }
+  if (isPlainObject(filter)) {
+    const filterExtras = unknownKeys(filter, FILTER_KEYS);
+    if (filterExtras.length > 0) {
+      return failure(
+        "parse-error",
+        `${context}: filter ${unsupportedKeysMessage(filterExtras, FILTER_KEYS)}`,
+      );
+    }
   }
 
   const includes = normalizePatternList(value.match, "match", head.provider, context);
@@ -199,6 +231,15 @@ export function normalizeOptions(
 ): { ok: true; config: NormalizedConfig } | { ok: false; failure: ResolveFailure } {
   if (!isPlainObject(options)) {
     return { ok: false, failure: failure("parse-error", "options must be an object") };
+  }
+  // Erratas de raíz (p. ej. "strcit") se rechazan antes de cualquier otra
+  // validación: el whitelisting silencioso las ocultaría.
+  const rootExtras = unknownKeys(options, ROOT_KEYS);
+  if (rootExtras.length > 0) {
+    return {
+      ok: false,
+      failure: failure("parse-error", `root ${unsupportedKeysMessage(rootExtras, ROOT_KEYS)}`),
+    };
   }
   if (!isPlainObject(options.aliases)) {
     return {

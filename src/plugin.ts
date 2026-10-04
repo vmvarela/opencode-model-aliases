@@ -154,7 +154,15 @@ export default Plugin.define({
     }
     const inlineOptions = isPlainObject(inline) ? inline : {};
 
-    const merged: Record<string, unknown> = {};
+    // Propiedades crudas de ambas fuentes se preservan, incluidas las raíces
+    // desconocidas: el whitelisting ocultaría erratas (p. ej. "strcit") antes
+    // de validar. El spread copia como propiedad de datos propia, seguro ante
+    // claves "__proto__" hostiles (nunca Object.assign sobre entrada no
+    // confiable). El orden inline>archivo se corrige abajo para strict/debug.
+    const merged: Record<string, unknown> = {
+      ...fileOptions,
+      ...inlineOptions,
+    };
     for (const key of ["strict", "debug"] as const) {
       // El valor inline, si fue suministrado (incluso `false`), gana al archivo.
       if (inlineOptions[key] !== undefined) {

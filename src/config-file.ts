@@ -7,11 +7,14 @@ import { isPlainObject } from "./config.js";
 const CONFIG_DIR = ".opencode";
 const FILE_NAME = "opencode-model-aliases.jsonc";
 
-/** Options crudas leídas del archivo; los valores aún no están validados. */
+/** Options crudas leídas del archivo; los valores aún no están validados.
+ *  Las claves raíz no reconocidas se preservan tal cual: normalizeOptions
+ *  debe rechazarlas como parse-error (sin whitelisting silencioso). */
 export interface RawFileOptions {
   readonly aliases?: Record<string, unknown>;
   readonly strict?: unknown;
   readonly debug?: unknown;
+  readonly [key: string]: unknown;
 }
 
 export interface LoadedConfigFile {
@@ -78,14 +81,12 @@ export async function loadConfigFile(startDirectory: string): Promise<LoadConfig
       };
     }
 
-    const options: {
-      aliases?: Record<string, unknown>;
-      strict?: unknown;
-      debug?: unknown;
-    } = {};
-    if (data.aliases !== undefined) options.aliases = data.aliases;
-    if (data.strict !== undefined) options.strict = data.strict;
-    if (data.debug !== undefined) options.debug = data.debug;
+    // Se preservan todas las claves propias del archivo, incluidas las
+    // desconocidas: el whitelisting ocultaría erratas de raíz antes de
+    // validar. El spread copia como propiedad de datos propia, seguro ante
+    // claves "__proto__" hostiles. El contenedor de aliases ya fue validado
+    // arriba, de ahí el cast.
+    const options = { ...data } as RawFileOptions;
     return { ok: true, file: { path: candidate, options } };
   }
 }
