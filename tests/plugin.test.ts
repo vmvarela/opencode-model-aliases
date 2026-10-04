@@ -57,6 +57,18 @@ describe("opencode-model-aliases plugin", () => {
     expect(harness.callbacks).toHaveLength(0);
   });
 
+  it("una errata en la raíz inline (strcit) falla antes de registrar callbacks", async () => {
+    const harness = createHarness({
+      sources: DEFAULT_SOURCES(),
+      options: {
+        aliases: { "github-copilot/sonnet": { match: "github-copilot/**" } },
+        strcit: true,
+      },
+    });
+    await expect(floatingModels.setup(harness.ctx)).rejects.toThrow(/strcit/);
+    expect(harness.callbacks).toHaveLength(0);
+  });
+
   it("expone el alias a un consumidor posterior tras el registro", async () => {
     const harness = createHarness({ sources: DEFAULT_SOURCES(), options: SIMPLE_OPTIONS() });
     await floatingModels.setup(harness.ctx);

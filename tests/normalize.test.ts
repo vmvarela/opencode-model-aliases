@@ -246,6 +246,53 @@ describe("normalizeOptions", () => {
     }
   });
 
+  it("rechaza claves raíz desconocidas y nombra la errata", () => {
+    const r = normalize({ aliases: { "anthropic/a": { match: "anthropic/**" } }, strcit: true });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.failure.kind).toBe("parse-error");
+      expect(r.failure.reason).toContain("strcit");
+      expect(r.failure.reason).toContain("aliases, strict, debug");
+    }
+    // Varias erratas: todas aparecen en el motivo.
+    const multi = normalize({
+      aliases: { "anthropic/a": { match: "anthropic/**" } },
+      strcit: true,
+      debgu: false,
+    });
+    expect(multi.ok).toBe(false);
+    if (!multi.ok) {
+      expect(multi.failure.reason).toContain("strcit");
+      expect(multi.failure.reason).toContain("debgu");
+    }
+  });
+
+  it("rechaza claves de alias desconocidas con contexto de la clave del alias", () => {
+    const r = normalize(
+      optionsWith({ "anthropic/a": { match: "anthropic/**", exlude: "anthropic/x*" } }),
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.failure.kind).toBe("parse-error");
+      expect(r.failure.reason).toContain('alias "anthropic/a"');
+      expect(r.failure.reason).toContain("exlude");
+      expect(r.failure.reason).toContain("match, exclude, filter, select, name");
+    }
+  });
+
+  it("rechaza claves desconocidas en filter con contexto del alias", () => {
+    const r = normalize(
+      optionsWith({ "anthropic/a": { match: "anthropic/**", filter: { statuses: ["active"] } } }),
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.failure.kind).toBe("parse-error");
+      expect(r.failure.reason).toContain('alias "anthropic/a"');
+      expect(r.failure.reason).toContain("filter");
+      expect(r.failure.reason).toContain("statuses");
+    }
+  });
+
   it("name opcional no vacío por alias; strict/debug globales booleanos", () => {
     const ok = normalize(
       optionsWith(

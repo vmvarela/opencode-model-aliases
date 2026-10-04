@@ -285,12 +285,25 @@ describe("separate JSONC config file", () => {
     if (result.ok && result.file) {
       expect(isPlainObject(result.file.options.aliases)).toBe(true);
       expect(result.file.options.strict).toBe(true);
-      // Claves desconocidas no se propagan a las options crudas.
-      expect(Object.keys(result.file.options).sort()).toEqual(["aliases", "strict"]);
+      // Las claves raíz desconocidas se preservan en las options crudas:
+      // normalizeOptions las rechazará como parse-error.
+      expect(result.file.options["unknown"]).toBe(1);
       expect(
         result.file.path.endsWith(path.join(".opencode", "opencode-model-aliases.jsonc")),
       ).toBe(true);
     }
+  });
+
+  it("una errata en la raíz del archivo (strcit) falla el setup sin registrar callbacks", async () => {
+    const project = path.join(tempRoot, "proj");
+    mkdirSync(project, { recursive: true });
+    writeConfigFile(
+      project,
+      '{ "aliases": { "anthropic/float": { "match": "anthropic/**" } }, "strcit": true }',
+    );
+    const harness = createHarness({ sources: SOURCES(), directory: project });
+    await expect(floatingModels.setup(harness.ctx)).rejects.toThrow(/strcit/);
+    expect(harness.callbacks).toHaveLength(0);
   });
 
   it("el RPC inspect expone el alias definido solo en el archivo", async () => {
