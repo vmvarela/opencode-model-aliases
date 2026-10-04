@@ -47,7 +47,7 @@
     "@biomejs/biome": "2.3.6",
     "@opencode/plugin": "2.0.16",
     "@types/node": "^24.19.0",
-    "@types/picomatch": "4.0.2",
+    "@types/picomatch": "4.0.3",
     "conventional-changelog-conventionalcommits": "9.3.1",
     "semantic-release": "25.0.9",
     "typescript": "5.9.3",
@@ -58,7 +58,7 @@
   },
   "dependencies": {
     "jsonc-parser": "3.3.1",
-    "picomatch": "4.0.3"
+    "picomatch": "4.0.7"
   },
   "license": "MIT"
 }
