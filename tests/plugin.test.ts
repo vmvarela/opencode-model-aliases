@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import floatingModels from "../src/index.js";
-import { makeTempRoot, removeTempRoot } from "./config-fs.js";
+import { makeTempRoot, removeTempRoot, writeConfigFile } from "./config-fs.js";
 import { createHarness as baseHarness, type ModelInfo, sourceModel } from "./harness.js";
 
 /**
@@ -374,5 +374,127 @@ describe("opencode-model-aliases plugin", () => {
       // Solo metadatos públicos del modelo; sin credenciales ni prompts.
       expect(message).not.toMatch(/token|key|secret|password/i);
     }
+  });
+});
+
+describe("opencode-model-aliases plugin: escape de caracteres de control", () => {
+  const CONTROL = /\p{Cc}/u;
+  const ESC = "\u001B[31mINJECTED";
+  const BEL = "\u0007";
+  const DEL = "\u007F";
+
+  /** Sin caracteres de control C0/C1/DEL y con el escape visible. */
+  function expectEscaped(message: string): void {
+    expect(CONTROL.test(message)).toBe(false);
+    expect(message).toContain("\\u001b");
+    expect(message).toContain("INJECTED");
+  }
+
+  it("el aviso tolerante escapa la clave del alias con ESC/BEL/DEL", async () => {
+    const hostileKey = `anthropic/esc${ESC}${BEL}${DEL}`;
+    const harness = createHarness({
+      sources: DEFAULT_SOURCES(),
+      options: { aliases: { [hostileKey]: { match: "anthropic/nonexistent*" } } },
+    });
+    await floatingModels.setup(harness.ctx);
+    harness.replay();
+    const hostile = warnings.filter((w) => w.includes("unresolved"));
+    expect(hostile).toHaveLength(2); // repetición del setup + repetición explícita
+    for (const message of hostile) {
+      expectEscaped(message);
+      expect(message).toContain('alias "anthropic/esc');
+      expect(message).toContain("(no-eligible)");
+    }
+  });
+
+  it("el aviso de depuración escapa la clave del alias y el modelID del ganador", async () => {
+    const hostileKey = `anthropic/alias-${ESC}${BEL}`;
+    const harness = createHarness({
+      sources: [sourceModel({ id: `wire-${ESC}${BEL}`, providerID: "anthropic", released: 3_000 })],
+      options: {
+        debug: true,
+        aliases: { [hostileKey]: { match: "anthropic/**" } },
+      },
+    });
+    await floatingModels.setup(harness.ctx);
+    harness.replay();
+    const hostile = warnings.filter((w) => w.includes("[debug]"));
+    expect(hostile).toHaveLength(2);
+    for (const message of hostile) {
+      expectEscaped(message);
+      expect(message).toContain('alias "anthropic/alias-\\u001b[31mINJECTED\\u0007"');
+      expect(message).toContain("/wire-\\u001b[31mINJECTED\\u0007");
+      expect(message).toContain("strategy=latest");
+    }
+  });
+
+  it("el error de colisión escapa la clave del alias", async () => {
+    const hostileKey = `anthropic/esc${ESC}`;
+    const harness = createHarness({
+      sources: [sourceModel({ id: `esc${ESC}`, providerID: "anthropic", released: 1_000 })],
+      options: { aliases: { [hostileKey]: { match: "anthropic/**" } } },
+    });
+    let message = "";
+    try {
+      await floatingModels.setup(harness.ctx);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("configuration collision");
+    expectEscaped(message);
+    expect(message).toContain('alias "anthropic/esc\\u001b[31mINJECTED"');
+  });
+
+  it("el error de preflight strict escapa la clave del alias", async () => {
+    const hostileKey = `anthropic/void${ESC}${DEL}`;
+    const harness = createHarness({
+      sources: DEFAULT_SOURCES(),
+      options: {
+        strict: true,
+        aliases: { [hostileKey]: { match: "anthropic/nonexistent*" } },
+      },
+    });
+    let message = "";
+    try {
+      await floatingModels.setup(harness.ctx);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("strict: unresolved aliases");
+    expectEscaped(message);
+    expect(message).toContain("anthropic/void\\u001b[31mINJECTED\\u007f (no-eligible)");
+  });
+
+  it("el motivo de fallo de carga del archivo de config escapa la ruta con caracteres de control", async () => {
+    const hostileDir = `${tempRoot}/esc${ESC}${BEL}`;
+    writeConfigFile(hostileDir, "{ no es jsonc válido");
+    const harness = createHarness({ directory: hostileDir, options: {} });
+    let message = "";
+    try {
+      await floatingModels.setup(harness.ctx);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("invalid configuration");
+    expectEscaped(message);
+    expect(message).toContain("malformed JSONC");
+  });
+
+  it("el motivo de fallo de normalización escapa la clave del alias", async () => {
+    const hostileKey = `anthropic/esc${ESC}${BEL}`;
+    const harness = createHarness({
+      sources: DEFAULT_SOURCES(),
+      options: { aliases: { [hostileKey]: {} } },
+    });
+    let message = "";
+    try {
+      await floatingModels.setup(harness.ctx);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("invalid configuration");
+    expectEscaped(message);
+    expect(message).toContain('alias "anthropic/esc\\u001b[31mINJECTED\\u0007"');
+    expect(message).toContain("match is required");
   });
 });

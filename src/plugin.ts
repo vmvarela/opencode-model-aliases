@@ -12,6 +12,7 @@ import {
   buildInspectRows,
   buildRows,
   formatReport,
+  sanitize,
   UNAVAILABLE_REPORT,
 } from "./report.js";
 import { resolveLatest } from "./resolve.js";
@@ -73,7 +74,7 @@ function replay(config: NormalizedConfig, editor: FloatingEditor): AliasReportRo
     );
     if (preexisting) {
       throw new Error(
-        `${LOG_PREFIX} configuration collision: alias "${alias.key}" would overwrite existing model "${alias.provider}/${alias.modelID}"`,
+        `${LOG_PREFIX} configuration collision: alias "${sanitize(alias.key)}" would overwrite existing model "${sanitize(alias.provider)}/${sanitize(alias.modelID)}"`,
       );
     }
   }
@@ -88,7 +89,7 @@ function replay(config: NormalizedConfig, editor: FloatingEditor): AliasReportRo
   if (config.strict) {
     const parts: string[] = [];
     for (const { alias, result } of results) {
-      if (!result.ok) parts.push(`${alias.key} (${result.failure.kind})`);
+      if (!result.ok) parts.push(`${sanitize(alias.key)} (${sanitize(result.failure.kind)})`);
     }
     if (parts.length > 0) {
       throw new Error(
@@ -101,7 +102,7 @@ function replay(config: NormalizedConfig, editor: FloatingEditor): AliasReportRo
     if (!result.ok) {
       // Tolerante: avisar y omitir solo este alias; los demás siguen.
       console.warn(
-        `${LOG_PREFIX} alias "${alias.key}" unresolved (${result.failure.kind}): ${result.failure.reason}`,
+        `${LOG_PREFIX} alias "${sanitize(alias.key)}" unresolved (${sanitize(result.failure.kind)}): ${sanitize(result.failure.reason)}`,
       );
       continue;
     }
@@ -122,7 +123,7 @@ function replay(config: NormalizedConfig, editor: FloatingEditor): AliasReportRo
       // mensajes solo contienen metadatos públicos del modelo (id, recuentos,
       // timestamp), nunca options/headers/credenciales ni prompts.
       console.warn(
-        `${LOG_PREFIX} [debug] alias "${alias.key}" -> ${alias.provider}/${winner.modelID}` +
+        `${LOG_PREFIX} [debug] alias "${sanitize(alias.key)}" -> ${sanitize(alias.provider)}/${sanitize(winner.modelID)}` +
           ` (strategy=latest, matched=${matching?.accepted ?? 0}, eligible=${filtering?.accepted ?? 0},` +
           ` released=${winner.time.released})`,
       );
@@ -140,7 +141,7 @@ export default Plugin.define({
     // transforms registrados.
     const loaded = await loadConfigFile(ctx.location.directory);
     if (!loaded.ok) {
-      throw new Error(`${LOG_PREFIX} invalid configuration: ${loaded.reason}`);
+      throw new Error(`${LOG_PREFIX} invalid configuration: ${sanitize(loaded.reason)}`);
     }
     const fileOptions = loaded.file?.options;
 
@@ -182,7 +183,9 @@ export default Plugin.define({
 
     const normalized = normalizeOptions(merged as unknown as Options);
     if (!normalized.ok) {
-      throw new Error(`${LOG_PREFIX} invalid configuration: ${normalized.failure.reason}`);
+      throw new Error(
+        `${LOG_PREFIX} invalid configuration: ${sanitize(normalized.failure.reason)}`,
+      );
     }
 
     // El host v2 traga las excepciones de los transform (State.get captura,
