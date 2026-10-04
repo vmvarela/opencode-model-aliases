@@ -306,8 +306,11 @@ trusted publisher (npm owner `vmvarela`, repository `opencode-model-aliases`,
 workflow filename `release.yml`, GitHub-hosted runner); and only afterwards
 setting the repository variable `NPM_RELEASE_ENABLED=true`. Subsequent
 releases are derived from Conventional Commits (`fix:` → patch, `feat:` →
-minor, `BREAKING CHANGE:` → major) and tag `v<version>`; the workflow never
-commits to `master`.
+minor, breaking commits → major) and tag `v<version>`; the workflow never
+commits to `master`. A breaking commit is a `feat!`/`fix!` (with or without
+scope, e.g. `feat(core)!:`) or any commit with a `BREAKING CHANGE:` /
+`BREAKING CHANGES:` footer; the preset's `noteKeywords` in `.releaserc.json`
+lists the plural explicitly because it is not covered by default.
 
 Pure config normalization and resolution live in `src/normalize.ts` / `src/resolve.ts`; the
 JSONC config-file loader is `src/config-file.ts`; the OpenCode v2 adapter is `src/plugin.ts`;

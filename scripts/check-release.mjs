@@ -78,12 +78,27 @@ const releaseConfig = readJson(".releaserc.json");
 const packageManifest = readJson("package.json");
 const workflow = readFileSync(path.join(ROOT, ".github/workflows/release.yml"), "utf8");
 
+// El preset conventionalcommits solo parsea los footers listados en
+// noteKeywords; al sobreescribirlos hay que incluir el plural
+// ("BREAKING CHANGES") además del singular y "BREAKING-CHANGE".
+const BREAKING_NOTE_KEYWORDS = ["BREAKING CHANGE", "BREAKING CHANGES", "BREAKING-CHANGE"];
+const conventionalPresetConfig = {
+  preset: "conventionalcommits",
+  parserOpts: { noteKeywords: BREAKING_NOTE_KEYWORDS },
+};
+
 // --- Config de release y metadatos del paquete -------------------------------
 await step("config .releaserc.json y metadatos package.json", () => {
   assert.deepEqual(releaseConfig.branches, ["master"]);
   assert.ok(!("tagFormat" in releaseConfig) || releaseConfig.tagFormat === `v\${version}`);
-  assert.equal(releaseConfig.plugins[0], "@semantic-release/commit-analyzer");
-  assert.equal(releaseConfig.plugins[1], "@semantic-release/release-notes-generator");
+  assert.deepEqual(releaseConfig.plugins[0], [
+    "@semantic-release/commit-analyzer",
+    conventionalPresetConfig,
+  ]);
+  assert.deepEqual(releaseConfig.plugins[1], [
+    "@semantic-release/release-notes-generator",
+    conventionalPresetConfig,
+  ]);
   assert.deepEqual(releaseConfig.plugins[2], ["@semantic-release/npm", { npmPublish: true }]);
   assert.deepEqual(releaseConfig.plugins[3], [
     "@semantic-release/github",
@@ -110,6 +125,12 @@ await step("config .releaserc.json y metadatos package.json", () => {
   });
   assert.deepEqual(packageManifest.publishConfig, { access: "public" });
   assert.deepEqual(packageManifest.devDependencies["semantic-release"], "25.0.9");
+  // Preset de Conventional Commits con pin exacto: 10.x es incompatible con el
+  // writer transitivo que empaqueta semantic-release 25.0.9.
+  assert.deepEqual(
+    packageManifest.devDependencies["conventional-changelog-conventionalcommits"],
+    "9.3.1",
+  );
   const semanticReleaseDirectDeps = Object.keys({
     ...packageManifest.dependencies,
     ...packageManifest.devDependencies,
@@ -163,45 +184,73 @@ await step("plugins empaquetados con semantic-release, versiones mínimas", () =
 });
 
 const { analyzeCommits } = await plugins["@semantic-release/commit-analyzer"].module;
+const analyzerConfig = releaseConfig.plugins[0][1];
 await step("commit-analyzer analyzeCommits sobre fixtures sintéticas", async () => {
   const cases = [
-    { messages: ["fix: corrige un fallo"], expected: "patch" },
+    { messages: ["feat!: rompe API"], expected: "major" },
+    { messages: ["fix!: rompe todo"], expected: "major" },
+    { messages: ["feat(core)!: rompe el núcleo"], expected: "major" },
+    { messages: ["feat: algo\n\nBREAKING CHANGE: rompe API"], expected: "major" },
+    { messages: ["feat: algo\n\nBREAKING CHANGES: rompe API"], expected: "major" },
     { messages: ["feat: agrega una cosa"], expected: "minor" },
-    { messages: ["fix: algo\n\nBREAKING CHANGE: rompe API"], expected: "major" },
+    { messages: ["fix: corrige un fallo"], expected: "patch" },
+    { messages: ["perf: acelera el arranque"], expected: "patch" },
     { messages: ["feat: a", "fix: b", "chore: c", "docs: d"], expected: "minor" },
     { messages: ["chore: deps", "docs: readme", "test: mocks"], expected: null },
   ];
   for (const { messages, expected } of cases) {
-    const releaseType = await analyzeCommits(
-      {},
-      { commits: commits(messages), logger: FAKE_LOGGER },
-    );
+    const releaseType = await analyzeCommits(analyzerConfig, {
+      commits: commits(messages),
+      logger: FAKE_LOGGER,
+      cwd: ROOT,
+    });
     assert.equal(releaseType, expected, `${JSON.stringify(messages)} → ${String(expected)}`);
   }
 });
 
 const { generateNotes } = await plugins["@semantic-release/release-notes-generator"].module;
-await step("release-notes-generator generateNotes sobre fixture", async () => {
-  const notes = await generateNotes(
-    {},
-    {
-      commits: commits(["feat: agrega thing", "fix: rompe\n\nBREAKING CHANGE: cambia API"]),
-      logger: FAKE_LOGGER,
-      lastRelease: { version: "1.0.0", gitTag: "v1.0.0", gitHead: "h0" },
-      nextRelease: { version: "1.1.0", gitTag: "v1.1.0", gitHead: "h1" },
-      options: { repositoryUrl: "https://github.com/vmvarela/opencode-model-aliases.git" },
-    },
-  );
+const notesConfig = releaseConfig.plugins[1][1];
+await step("release-notes-generator generateNotes sobre fixtures con breaking", async () => {
+  const notes = await generateNotes(notesConfig, {
+    commits: commits([
+      "feat!: rompe el contrato",
+      "fix(core)!: rompe el núcleo\n\nBREAKING CHANGES: detalla el rompimiento",
+      "feat: agrega thing",
+      "fix: arregla detalle",
+    ]),
+    logger: FAKE_LOGGER,
+    cwd: ROOT,
+    lastRelease: { version: "1.0.0", gitTag: "v1.0.0", gitHead: "h0" },
+    nextRelease: { version: "2.0.0", gitTag: "v2.0.0", gitHead: "h1" },
+    options: { repositoryUrl: "https://github.com/vmvarela/opencode-model-aliases.git" },
+  });
   const text = String(notes);
+  // El heading real es "### ⚠ BREAKING CHANGES": sin incluir el emoji.
+  const breakingIndex = text.indexOf("BREAKING CHANGES");
+  const featuresIndex = text.indexOf("### Features");
   for (const expected of [
+    "BREAKING CHANGES",
     "### Features",
     "agrega thing",
-    "### BREAKING CHANGES",
-    "cambia API",
-    "/compare/v1.0.0...v1.1.0",
+    "/compare/v1.0.0...v2.0.0",
   ]) {
     assert.ok(text.includes(expected), `notas sin ${JSON.stringify(expected)}`);
   }
+  // La sección de breaking va primero y recoge tanto el `!` del header como
+  // el footer en plural.
+  assert.ok(
+    breakingIndex !== -1 && breakingIndex < featuresIndex,
+    "sección BREAKING CHANGES ausente o fuera de orden",
+  );
+  const breakingSection = featuresIndex === -1 ? "" : text.slice(breakingIndex, featuresIndex);
+  assert.ok(
+    breakingSection.includes("rompe el contrato"),
+    "el breaking por header `!` no aparece en la sección BREAKING CHANGES",
+  );
+  assert.ok(
+    breakingSection.includes("detalla el rompimiento"),
+    "el footer BREAKING CHANGES plural no aparece en la sección BREAKING CHANGES",
+  );
 });
 
 // Interfaces de publicación presentes pero nunca invocadas desde aquí.
