@@ -236,11 +236,12 @@ remains fully self-contained.
 The smoke builds the product first (stale `dist/` cannot pass), then `pnpm
 pack`s it and extracts the tarball into a fresh temp tree, linking the repo's
 existing `node_modules` for the runtime peer dependency — no registry
-downloads or external installs (the package is not published; the npm
-publishing/install path is NOT tested). It loads the **packed product package
-itself** through the official `plugins` config entry — with **file-only
-configuration**: the entry carries no `options` and the aliases/strict/debug
-come exclusively from a `.opencode/opencode-model-aliases.jsonc` file
+downloads or external installs: the smoke deliberately exercises the locally
+packed checkout, so it does not verify installation from the npm registry. It
+loads the **packed product package itself** through the official `plugins` config
+entry — with **file-only configuration**: the entry carries no `options` and
+the aliases/strict/debug come exclusively from a
+`.opencode/opencode-model-aliases.jsonc` file
 (JSONC comments + trailing commas) in the temp project — and a local
 models.dev-format catalog (`OPENCODE_MODELS_PATH` +
 `OPENCODE_DISABLE_MODELS_FETCH=1`), against a loopback-only fake
@@ -273,44 +274,56 @@ no model call and no session execution.
 TMPDIR=/path/to/approved-tmp pnpm smoke:opencode
 ```
 
-> This package is not published to npm yet. For local development, point a
-> `plugins` config entry directly at the built repo/product directory — the
-> root `index.js` entrypoint loads as-is, no manual shim needed.
+### Installing the published package
 
-### Release workflow (prepared, currently DISABLED)
+The package is published to npm and installed like any other package. Use the
+unpinned `@latest` form, which resolves to the current published release at
+install time:
 
-[.github/workflows/release.yml](.github/workflows/release.yml) and
-[.releaserc.json](.releaserc.json) prepare [semantic-release](https://semantic-release.gitbook.io/)
-(v25.0.9, dev dependency exactly) for npm publishing with [npm trusted
+```sh
+npm install opencode-model-aliases@latest
+```
+
+As an optional development alternative, a `plugins` config entry can point
+directly at a built checkout of this repo/product directory — the root
+`index.js` entrypoint loads as-is, no manual shim needed.
+
+### Release workflow
+
+[.github/workflows/release.yml](.github/workflows/release.yml) runs
+[semantic-release](https://semantic-release.gitbook.io/) (v25.0.9, dev
+dependency exactly) on every push to `master` and on manual
+`workflow_dispatch`, publishing the package to npm with [npm trusted
 publishing](https://docs.npmjs.com/trusted-publishers) via OIDC on
-GitHub-hosted runners (no `NPM_TOKEN`, no persistent npm token) and a GitHub
-Release per version whose notes serve as the changelog (there is no changelog
-bot and no version-commit push to `master`). The workflow only runs on `master`
-and only when the repository variable `NPM_RELEASE_ENABLED` is set to `true`;
-as long as that variable is undefined it stays disabled. The offline
-release-consistency check (`pnpm run check:release`, also integrated in the
-release workflow before releasing) validates `.releaserc.json`, the package
-metadata, the disabled workflow gate, the bundled plugins' interfaces, its
+GitHub-hosted runners (no `NPM_TOKEN`, no persistent npm token) and creating a
+GitHub Release per version whose notes serve as the changelog (there is no
+changelog bot and no version-commit push to `master`).
+
+The release job only runs for the official repository
+`vmvarela/opencode-model-aliases`, on the `master` branch, and when the
+repository variable `NPM_RELEASE_ENABLED` is `true` — it is currently `true`
+and must remain so; removing it or setting it to `false` disables npm
+publishing. Releases are serialized on the same branch and never cancelled
+midway. Before releasing, the workflow runs the full verification suite
+(`pnpm run verify`) and the offline release-consistency check
+(`pnpm run check:release`), which validates `.releaserc.json`, the package
+metadata, the workflow gate, the bundled plugins' interfaces, the
 commit-analyzer and release-notes-generator behavior over fixed fixtures, and
 the tarball inventory of `npm pack --dry-run` — without network, registry, or
 semantic-release execution.
 
-Activating releases later is an explicit user decision and requires, in this
-order: creating the public GitHub repository `vmvarela/opencode-model-aliases`
-with the same `repository` metadata already present in `package.json`; doing
-the **first publish manually** (a new package cannot bootstrap OIDC trusted
-publishing yet) with 2FA enabled and then tagging `v0.1.0` (annotated, on the
-exact published commit, reachable from `master` — without that first tag
-semantic-release would infer a wrong starting version); configuring npm as a
-trusted publisher (npm owner `vmvarela`, repository `opencode-model-aliases`,
-workflow filename `release.yml`, GitHub-hosted runner); and only afterwards
-setting the repository variable `NPM_RELEASE_ENABLED=true`. Subsequent
-releases are derived from Conventional Commits (`fix:` → patch, `feat:` →
-minor, breaking commits → major) and tag `v<version>`; the workflow never
-commits to `master`. A breaking commit is a `feat!`/`fix!` (with or without
-scope, e.g. `feat(core)!:`) or any commit with a `BREAKING CHANGE:` /
-`BREAKING CHANGES:` footer; the preset's `noteKeywords` in `.releaserc.json`
-lists the plural explicitly because it is not covered by default.
+Release versions are derived from Conventional Commits (`fix:` and `perf:` →
+patch, `feat:` → minor, breaking commits → major) and tagged `v<version>`. A breaking
+commit is a `feat!`/`fix!` (with or without scope, e.g. `feat(core)!:`) or any
+commit with a `BREAKING CHANGE:` / `BREAKING CHANGES:` footer; the preset's
+`noteKeywords` in `.releaserc.json` lists the plural explicitly because it is
+not covered by default. For the current published version, consult the npm
+registry (`npm view opencode-model-aliases`) or the repo's GitHub Releases.
+The one-time bootstrap checklist — manual first publish with 2FA (required to
+bootstrap OIDC trusted publishing on a new package), npm trusted-publisher
+configuration, and the `v0.1.0` starting tag — is complete; subsequent
+eligible releases are handled by the active workflow on push to `master`
+(with `workflow_dispatch` still available as a manual trigger).
 
 Pure config normalization and resolution live in `src/normalize.ts` / `src/resolve.ts`; the
 JSONC config-file loader is `src/config-file.ts`; the OpenCode v2 adapter is `src/plugin.ts`;
