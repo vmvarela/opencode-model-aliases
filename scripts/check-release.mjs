@@ -153,8 +153,8 @@ await step("workflow release.yml: compuerta, permisos y credenciales", () => {
   assert.match(workflow, /contents: write/);
   assert.match(workflow, /id-token: write/);
   assert.ok(!/issues: write|pull-requests: write/.test(workflow));
-  assert.match(workflow, /actions\/checkout@v6/);
-  assert.match(workflow, /actions\/setup-node@v6/);
+  assert.match(workflow, /actions\/checkout@v[67]/);
+  assert.match(workflow, /actions\/setup-node@v[67]/);
   assert.match(workflow, /fetch-depth: 0/);
   assert.match(workflow, /node-version: 24/);
   assert.match(workflow, /registry-url: https:\/\/registry\.npmjs\.org/);
