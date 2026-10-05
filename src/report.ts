@@ -1,5 +1,6 @@
 import type { Candidate, NormalizedAlias } from "./config.js";
 import type { FailureKind } from "./errors.js";
+import { aliasDisplayName } from "./names.js";
 import type { ResolveResult } from "./resolve.js";
 
 /** Estado de una fila: el alias resolvió o quedó sin resolver (tolerante). */
@@ -16,6 +17,8 @@ export type InspectRowStatus = "active" | "inactive" | "unresolved";
 export interface InspectReportRow {
   readonly key: string;
   readonly provider: string;
+  /** Nombre visible: name configurado intacto o el generado por defecto. */
+  readonly displayName: string;
   readonly alias: string;
   readonly strategy: "latest";
   readonly status: InspectRowStatus;
@@ -37,6 +40,8 @@ export interface AliasReportRow {
   /** Única estrategia implementada. */
   readonly strategy: "latest";
   readonly status: AliasReportStatus;
+  /** Nombre visible: name configurado intacto o el generado por defecto. */
+  readonly displayName: string;
   /** Solo resolved: ganador real del catálogo. */
   readonly providerID?: string;
   readonly catalogID?: string;
@@ -72,12 +77,14 @@ export function buildRows<T extends Candidate & { readonly modelID?: string }>(
   results: ReadonlyArray<{ alias: NormalizedAlias; result: ResolveResult<T> }>,
 ): AliasReportRow[] {
   return results.map(({ alias, result }) => {
+    const displayName = aliasDisplayName(alias);
     if (result.ok) {
       const wire = result.model.modelID;
       return {
         key: alias.key,
         strategy: "latest",
         status: "resolved",
+        displayName,
         providerID: result.model.providerID,
         catalogID: result.model.id,
         // El modelID de ejecución solo interesa por separado si difiere.
@@ -88,6 +95,7 @@ export function buildRows<T extends Candidate & { readonly modelID?: string }>(
       key: alias.key,
       strategy: "latest",
       status: "unresolved",
+      displayName,
       failureKind: result.failure.kind,
       failureReason: result.failure.reason,
     } as AliasReportRow;
@@ -111,11 +119,13 @@ export function buildInspectRows(
     const key = sanitize(row.key);
     const safeProvider = sanitize(provider);
     const safeAlias = sanitize(alias);
+    const safeDisplayName = sanitize(row.displayName);
 
     if (row.status === "unresolved") {
       return {
         key,
         provider: safeProvider,
+        displayName: safeDisplayName,
         alias: safeAlias,
         strategy: "latest",
         status: "unresolved",
@@ -141,6 +151,7 @@ export function buildInspectRows(
     return {
       key,
       provider: safeProvider,
+      displayName: safeDisplayName,
       alias: safeAlias,
       strategy: "latest",
       status,
@@ -155,10 +166,12 @@ export function buildInspectRows(
 /**
  * Formato determinista: informe agrupado por proveedor con resumen compacto.
  * Las filas se agrupan por el proveedor literal del alias y se ordenan por
- * clave (orden de unidades de código). En cada alias se muestra su nombre en
- * una línea y su objetivo indentado en la siguiente, sin prefijos redundantes
- * ni etiquetas activas repetitivas; las incidencias (inactivos o sin resolver)
- * y el modelID de ejecución (wire) cuando difiere se destacan explícitamente.
+ * clave (orden de unidades de código). Cada alias muestra su nombre visible
+ * como etiqueta principal, con el modelID del alias entre paréntesis solo si
+ * difiere, y su objetivo indentado en la línea siguiente, sin prefijos
+ * redundantes ni etiquetas activas repetitivas; las incidencias (inactivos o
+ * sin resolver) y el modelID de ejecución (wire) cuando difiere se destacan
+ * explícitamente.
  */
 export function formatReport(
   rows: ReadonlyArray<AliasReportRow>,
@@ -208,12 +221,17 @@ export function formatReport(
     const aliasBlocks = providerRows.map((row) => {
       const slash = row.key.indexOf("/");
       const aliasName = slash !== -1 ? row.key.slice(slash + 1) : row.key;
+      const safeDisplayName = sanitize(row.displayName);
       const safeAlias = sanitize(aliasName);
+      // Etiqueta principal = displayName; solo el modelID del alias se muestra
+      // entre paréntesis cuando difiere del nombre visible.
+      const aliasLabel =
+        row.displayName === aliasName ? safeDisplayName : `${safeDisplayName} (${safeAlias})`;
 
       if (row.status === "unresolved") {
         const kind = sanitize(row.failureKind ?? "unknown");
         const reason = row.failureReason ? `: ${sanitize(row.failureReason)}` : "";
-        return `  ${safeAlias}\n    → unresolved (${kind})${reason}`;
+        return `  ${aliasLabel}\n    → unresolved (${kind})${reason}`;
       }
 
       const target =
@@ -228,7 +246,7 @@ export function formatReport(
       if (!visible.has(row.key)) {
         targetLine += " (inactive: not in final catalog)";
       }
-      return `  ${safeAlias}\n${targetLine}`;
+      return `  ${aliasLabel}\n${targetLine}`;
     });
 
     return `${sanitize(provider)}\n${aliasBlocks.join("\n")}`;

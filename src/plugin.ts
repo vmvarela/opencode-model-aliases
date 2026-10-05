@@ -1,11 +1,7 @@
 import { type Model, Plugin } from "@opencode/plugin";
-import {
-  isPlainObject,
-  type NormalizedAlias,
-  type NormalizedConfig,
-  type Options,
-} from "./config.js";
+import { isPlainObject, type NormalizedConfig, type Options } from "./config.js";
 import { loadConfigFile } from "./config-file.js";
+import { aliasDisplayName } from "./names.js";
 import { normalizeOptions } from "./normalize.js";
 import {
   type AliasReportRow,
@@ -20,7 +16,6 @@ import { ModelAliasesRpc } from "./rpc.js";
 
 const PLUGIN_ID = "opencode-model-aliases";
 const LOG_PREFIX = `[${PLUGIN_ID}]`;
-const ALIAS_SUFFIX = " (alias)";
 
 type ModelInfo = Model.Info;
 
@@ -32,25 +27,6 @@ type ModelInfo = Model.Info;
 interface FloatingEditor {
   list(): readonly ModelInfo[];
   update(providerID: string, modelID: string, update: (model: ModelInfo) => void): void;
-}
-
-/**
- * Nombre visible por defecto, determinista a partir del modelID del alias
- * (último segmento, separadores como espacios, primera letra mayúscula):
- * "sonnet" → "Sonnet (alias)". El name configurado se usa intacto.
- */
-function defaultAliasName(modelID: string): string {
-  const segment = modelID.split("/").pop() ?? "";
-  const label = segment
-    .split(/[-_]+/)
-    .filter((word) => word.length > 0)
-    .map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1)}`)
-    .join(" ");
-  return `${label}${ALIAS_SUFFIX}`;
-}
-
-function displayName(alias: NormalizedAlias): string {
-  return alias.nameExplicit ? alias.name : defaultAliasName(alias.modelID);
 }
 
 /**
@@ -107,7 +83,7 @@ function replay(config: NormalizedConfig, editor: FloatingEditor): AliasReportRo
       continue;
     }
     const { model: winner, stages } = result;
-    const label = displayName(alias);
+    const label = aliasDisplayName(alias);
     editor.update(alias.provider, alias.modelID, (model) => {
       const clone = structuredClone(winner);
       // Solo id y name cambian; el resto del Model.Info del ganador se hereda.

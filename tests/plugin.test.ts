@@ -107,6 +107,54 @@ describe("opencode-model-aliases plugin", () => {
     expect(harness.view().get("github-copilot/sonnet")?.name).toBe("github-copilot/sonnet");
   });
 
+  it("el name del catálogo y el displayName del informe coinciden para name explícito y generado", async () => {
+    const harness = createHarness({
+      sources: DEFAULT_SOURCES(),
+      options: {
+        aliases: {
+          "github-copilot/sonnet": { match: "github-copilot/**", name: "Sonnet (floating)" },
+          "anthropic/pick": { match: "anthropic/**" },
+        },
+      },
+    });
+    await floatingModels.setup(harness.ctx);
+    harness.replay();
+    const explicit = harness.view().get("github-copilot/sonnet");
+    const generated = harness.view().get("anthropic/pick");
+    expect(explicit?.name).toBe("Sonnet (floating)"); // name intacto en Material.Info
+    expect(generated?.name).toBe("Pick (alias)"); // misma regla que el informe
+
+    const handler = harness.rpc.handlers[0]?.inspect;
+    if (!handler) throw new Error("inspect handler missing");
+    const result = (await handler({}, {})) as {
+      rows: Array<{ key: string; displayName: string }>;
+    };
+    const byKey = new Map(result.rows.map((row) => [row.key, row.displayName]));
+    expect(byKey.get("github-copilot/sonnet")).toBe("Sonnet (floating)");
+    expect(byKey.get("anthropic/pick")).toBe("Pick (alias)");
+  });
+
+  it("modelID con barra: catálogo e informe generan el mismo nombre y mantienen el modelID de ejecución", async () => {
+    const harness = createHarness({
+      sources: DEFAULT_SOURCES(),
+      options: { aliases: { "anthropic/claude/float": { match: "anthropic/**" } } },
+    });
+    await floatingModels.setup(harness.ctx);
+    harness.replay();
+    const alias = harness.view().get("anthropic/claude/float");
+    expect(alias?.name).toBe("Float (alias)"); // último segmento de "claude/float"
+
+    const handler = harness.rpc.handlers[0]?.inspect;
+    if (!handler) throw new Error("inspect handler missing");
+    const result = (await handler({}, {})) as {
+      text: string;
+      rows: Array<{ key: string; displayName: string }>;
+    };
+    expect(result.rows[0]?.key).toBe("anthropic/claude/float");
+    expect(result.rows[0]?.displayName).toBe("Float (alias)");
+    expect(result.text).toContain("Float (alias) (claude/float)\n    → claude-b");
+  });
+
   it("hereda package, canonical, settings, headers, body, capabilities, variants, cost y limit", async () => {
     const rich = sourceModel({
       id: "sonnet-4",

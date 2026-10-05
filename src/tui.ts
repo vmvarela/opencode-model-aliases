@@ -11,6 +11,7 @@ const ERROR_MESSAGE = "Unable to load model aliases. Please reload or try again.
 
 export interface InspectResponseRow {
   readonly key: string;
+  readonly displayName: string;
   readonly provider: string;
   readonly alias: string;
   readonly strategy: "latest";
@@ -33,6 +34,7 @@ function isInspectRow(value: unknown): value is InspectResponseRow {
   const row = value as Record<string, unknown>;
   if (
     typeof row.key !== "string" ||
+    typeof row.displayName !== "string" ||
     typeof row.provider !== "string" ||
     typeof row.alias !== "string" ||
     row.strategy !== "latest" ||
@@ -57,7 +59,11 @@ export function isInspectResponse(value: unknown): value is InspectResponse {
 }
 
 export function formatDetailMessage(row: InspectResponseRow): string {
-  const lines: string[] = [`Alias: ${row.key}`];
+  const lines: string[] = [`Alias: ${row.key}`, `Name: ${row.displayName}`];
+
+  if (row.alias !== row.displayName) {
+    lines.push(`Alias model ID: ${row.alias}`);
+  }
 
   if (row.status === "unresolved") {
     lines.push(`Strategy: ${row.strategy}`);
@@ -142,7 +148,7 @@ const plugin = {
 
             return {
               category: row.provider,
-              title: row.alias,
+              title: row.displayName,
               description,
               ...(footer !== undefined ? { footer } : {}),
               value: row.key,
@@ -165,7 +171,7 @@ const plugin = {
           }
 
           await context.ui.dialog.alert({
-            title: `${COMMAND_TITLE}: ${selectedRow.alias}`,
+            title: `${COMMAND_TITLE}: ${selectedRow.displayName}`,
             message: formatDetailMessage(selectedRow),
           });
         } catch {

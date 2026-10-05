@@ -50,6 +50,12 @@ const DEFAULT_SOURCES = () => [
 let tempRoot: string;
 let warnings: string[];
 
+/** Resultado de resolución sin resolver, compatible con ResolveResult<never>. */
+const unresolved = (reason: string) => ({
+  ok: false as const,
+  failure: { kind: "no-eligible" as const, reason },
+});
+
 beforeEach(() => {
   tempRoot = makeTempRoot();
   warnings = [];
@@ -84,6 +90,7 @@ describe("ModelAliasesRpc contract", () => {
             properties: {
               key: { type: "string" },
               provider: { type: "string" },
+              displayName: { type: "string" },
               alias: { type: "string" },
               strategy: { type: "string", enum: ["latest"] },
               status: { type: "string", enum: ["active", "inactive", "unresolved"] },
@@ -94,7 +101,7 @@ describe("ModelAliasesRpc contract", () => {
               failureKind: { type: "string" },
               failureReason: { type: "string" },
             },
-            required: ["key", "provider", "alias", "strategy", "status"],
+            required: ["key", "provider", "displayName", "alias", "strategy", "status"],
             additionalProperties: false,
           },
         },
@@ -131,7 +138,9 @@ describe("inspect report", () => {
     });
     harness.replay();
     const text = await harness.inspect();
-    expect(text).toContain("sonnet\n    → sonnet-4 (wire model ID: sonnet-4-exec)");
+    expect(text).toContain(
+      "Sonnet (alias) (sonnet)\n    → sonnet-4 (wire model ID: sonnet-4-exec)",
+    );
     // El objetivo mostrado es el id real del catálogo, no el wire.
     expect(text).not.toContain("→ sonnet-4-exec");
   });
@@ -140,7 +149,7 @@ describe("inspect report", () => {
     const { harness } = await setup({ aliases: { "anthropic/pick": { match: "anthropic/**" } } });
     harness.replay();
     const text = await harness.inspect();
-    expect(text).toContain("pick\n    → claude-b");
+    expect(text).toContain("Pick (alias) (pick)\n    → claude-b");
     expect(text).not.toContain("wire model ID");
   });
 
@@ -153,9 +162,9 @@ describe("inspect report", () => {
     });
     harness.replay();
     const text = await harness.inspect();
-    expect(text).toContain("good\n    → claude-b");
+    expect(text).toContain("Good (alias) (good)\n    → claude-b");
     expect(text).toContain(
-      "void\n    → unresolved (no-eligible): no candidate matched match/exclude patterns",
+      "Void (alias) (void)\n    → unresolved (no-eligible): no candidate matched match/exclude patterns",
     );
   });
 
@@ -175,7 +184,7 @@ describe("inspect report", () => {
     );
     harness.replay();
     const text = await harness.inspect();
-    expect(text).toContain("sonnet\n    → sonnet-5");
+    expect(text).toContain("Sonnet (alias) (sonnet)\n    → sonnet-5");
     expect(text).not.toContain("sonnet-4");
   });
 
@@ -188,7 +197,7 @@ describe("inspect report", () => {
     harness.removeSource("github-copilot", "sonnet-4");
     harness.replay();
     const text = await harness.inspect();
-    expect(text).toContain("sonnet\n    → unresolved");
+    expect(text).toContain("Sonnet (alias) (sonnet)\n    → unresolved");
     expect(text).not.toContain("1 active");
   });
 
@@ -202,7 +211,7 @@ describe("inspect report", () => {
       (editor as unknown as { remove: (p: string, m: string) => void }).remove("anthropic", "pick");
     });
     const text = await harness.inspect();
-    expect(text).toContain("pick\n    → claude-b (inactive: not in final catalog)");
+    expect(text).toContain("Pick (alias) (pick)\n    → claude-b (inactive: not in final catalog)");
     expect(text).not.toContain("1 active");
   });
 
@@ -223,7 +232,7 @@ describe("inspect report", () => {
       });
     });
     const text = await harness.inspect();
-    expect(text).toContain("pick\n    → claude-b (inactive: not in final catalog)");
+    expect(text).toContain("Pick (alias) (pick)\n    → claude-b (inactive: not in final catalog)");
     expect(text).not.toContain("1 active");
   });
 
@@ -232,7 +241,7 @@ describe("inspect report", () => {
       aliases: { "anthropic/pick": { match: "anthropic/**" } },
     });
     harness.replay();
-    expect(await harness.inspect()).toContain("pick\n    → claude-b");
+    expect(await harness.inspect()).toContain("Pick (alias) (pick)\n    → claude-b");
     // Otro plugin posterior reescribe el modelID de ejecución del alias.
     await harness.ctx.model.transform((editor) => {
       (
@@ -264,7 +273,9 @@ describe("inspect report", () => {
       });
     });
     const text = await harness.inspect();
-    expect(text).toContain("sonnet\n    → sonnet-4 (wire model ID: sonnet-4-exec)");
+    expect(text).toContain(
+      "Sonnet (alias) (sonnet)\n    → sonnet-4 (wire model ID: sonnet-4-exec)",
+    );
   });
 
   it("configuración vacía: informe sin aliases, sin modelo materializado", async () => {
@@ -286,7 +297,7 @@ describe("inspect report", () => {
     expect(await harness.inspect()).toBe(UNAVAILABLE_REPORT);
     expect(harness.counters.list).toBeGreaterThan(before);
     harness.restoreList();
-    expect(await harness.inspect()).toContain("pick\n    → claude-b");
+    expect(await harness.inspect()).toContain("Pick (alias) (pick)\n    → claude-b");
   });
 
   it("una repetición fallida limpia el snapshot: nada parcial ni stale como actual", async () => {
@@ -341,10 +352,77 @@ describe("inspect report", () => {
     });
     harness.replay();
     const text = await harness.inspect();
-    const indexZz = text.indexOf("  zz\n");
-    const indexAa = text.indexOf("  aa\n");
+    const indexZz = text.indexOf("  Zz (alias) (zz)\n");
+    const indexAa = text.indexOf("  Aa (alias) (aa)\n");
     expect(indexAa).toBeGreaterThan(0);
     expect(indexAa).toBeLessThan(indexZz);
+  });
+
+  it("name explícito, nombre generado y modelID con barra concuerdan en texto y filas RPC", async () => {
+    const { harness } = await setup({
+      aliases: {
+        // Name configurado: intacto en texto y en la fila estructurada.
+        "github-copilot/sonnet": { match: "github-copilot/**", name: "Sonnet (floating)" },
+        // Sin name: mismo nombre generado que la materialización del catálogo.
+        "anthropic/pick": { match: "anthropic/**" },
+        // modelID con barra: el nombre generado proviene del último segmento.
+        "openai/ft/legacy": { match: "openai/**" },
+      },
+    });
+    harness.replay();
+    const handler = harness.rpc.handlers[0]?.inspect;
+    if (!handler) throw new Error("inspect handler missing");
+    const result = (await handler({}, {})) as { text: string; rows: InspectReportRow[] };
+
+    // Texto: name explícito intacto, y el alias openai sin resolver conserva
+    // el nombre generado a partir del último segmento del modelID con barra.
+    expect(result.text).toContain("Sonnet (floating) (sonnet)\n    → sonnet-4");
+    expect(result.text).toContain("Pick (alias) (pick)\n    → claude-b");
+    expect(result.text).toContain("Legacy (alias) (ft/legacy)\n    → unresolved (no-eligible)");
+
+    // Filas estructuradas: displayName primitivo requerido y concordante.
+    const byRow = new Map(result.rows.map((row) => [row.key, row]));
+    expect(byRow.get("github-copilot/sonnet")?.displayName).toBe("Sonnet (floating)");
+    expect(byRow.get("anthropic/pick")?.displayName).toBe("Pick (alias)");
+    // Sin resolver: la fila estructurada conserva el nombre visible.
+    expect(byRow.get("openai/ft/legacy")?.status).toBe("unresolved");
+    expect(byRow.get("openai/ft/legacy")?.displayName).toBe("Legacy (alias)");
+    for (const row of result.rows) {
+      expect(typeof row.displayName).toBe("string");
+      // Texto y filas RPC comparten el mismo displayName.
+      expect(result.text).toContain(row.displayName);
+    }
+  });
+
+  it("alias inactivo y sin resolver conservan el nombre visible en texto y filas", async () => {
+    const { harness } = await setup({
+      aliases: {
+        "anthropic/inactive": { match: "anthropic/**" },
+        "openai/missing": { match: "openai/**" },
+      },
+    });
+    harness.replay();
+    // Otro plugin posterior deshabilita el alias materializado.
+    await harness.ctx.model.transform((editor) => {
+      (
+        editor as unknown as {
+          update: (p: string, m: string, fn: (model: ModelInfo) => void) => void;
+        }
+      ).update("anthropic", "inactive", (model) => {
+        (model as { enabled: boolean }).enabled = false;
+      });
+    });
+    const handler = harness.rpc.handlers[0]?.inspect;
+    if (!handler) throw new Error("inspect handler missing");
+    const result = (await handler({}, {})) as { text: string; rows: InspectReportRow[] };
+
+    expect(result.text).toContain("Inactive (alias) (inactive)\n    → claude-b (inactive:");
+    const byRow = new Map(result.rows.map((row) => [row.key, row]));
+    expect(byRow.get("anthropic/inactive")?.status).toBe("inactive");
+    expect(byRow.get("anthropic/inactive")?.displayName).toBe("Inactive (alias)");
+    expect(byRow.get("openai/missing")?.status).toBe("unresolved");
+    expect(byRow.get("openai/missing")?.displayName).toBe("Missing (alias)");
+    expect(result.text).toContain("Missing (alias) (missing)\n    → unresolved");
   });
 
   it("fallo del registro RPC: el modelo se desecha y el setup rechaza con cero recursos", async () => {
@@ -396,9 +474,30 @@ describe("report primitives", () => {
     if (!alias) throw new Error("alias should exist");
     const rows = buildRows([{ alias, result: { ok: true, model: rich, stages: [] } }]);
     expect(Object.keys(rows[0] ?? {}).sort()).toEqual(
-      ["catalogID", "key", "providerID", "status", "strategy"].sort(),
+      ["catalogID", "displayName", "key", "providerID", "status", "strategy"].sort(),
     );
+    expect(rows[0]?.displayName).toBe("Sonnet (alias)");
     expect(JSON.stringify(rows)).not.toMatch(/compaction|temperature|"x-hint"/);
+  });
+
+  it("buildRows conserva el nombre visible en filas sin resolver", () => {
+    const normalized = normalizeOptions({
+      aliases: {
+        "openai/void": { match: "openai/**" },
+        "github-copilot/named": { match: "github-copilot/**", name: "Sonnet (floating)" },
+      },
+    });
+    if (!normalized.ok) throw new Error("options should normalize");
+    const [voidAlias, namedAlias] = normalized.config.aliases;
+    if (!voidAlias || !namedAlias) throw new Error("aliases should exist");
+    const rows = buildRows([
+      { alias: voidAlias, result: unresolved("no candidate matched match/exclude patterns") },
+      { alias: namedAlias, result: unresolved("no candidate matched match/exclude patterns") },
+    ]);
+    // Nombre generado idéntico al de la materialización del catálogo.
+    expect(rows[0]?.displayName).toBe("Void (alias)");
+    // Name explícito intacto en filas sin resolver.
+    expect(rows[1]?.displayName).toBe("Sonnet (floating)");
   });
 
   it("sanitize escapa caracteres de control (ESC/CSI incluidos) en ids y reasons", () => {
@@ -419,6 +518,7 @@ describe("formatReport visual and structural layout", () => {
         key: "github-copilot/gemini-flash",
         strategy: "latest",
         status: "resolved",
+        displayName: "Gemini Flash (alias)",
         providerID: "github-copilot",
         catalogID: "gemini-2.5-flash",
       },
@@ -426,6 +526,7 @@ describe("formatReport visual and structural layout", () => {
         key: "github-copilot/sonnet",
         strategy: "latest",
         status: "resolved",
+        displayName: "Sonnet (alias)",
         providerID: "github-copilot",
         catalogID: "claude-3-5-sonnet-20241022",
       },
@@ -433,6 +534,7 @@ describe("formatReport visual and structural layout", () => {
         key: "openai/gpt-luna",
         strategy: "latest",
         status: "resolved",
+        displayName: "Gpt Luna (alias)",
         providerID: "openai",
         catalogID: "gpt-4o-mini-2024-07-18",
       },
@@ -440,6 +542,7 @@ describe("formatReport visual and structural layout", () => {
         key: "openai/gpt-sol",
         strategy: "latest",
         status: "resolved",
+        displayName: "Gpt Sol (alias)",
         providerID: "openai",
         catalogID: "o1-preview",
       },
@@ -447,6 +550,7 @@ describe("formatReport visual and structural layout", () => {
         key: "openai/gpt-terra",
         strategy: "latest",
         status: "resolved",
+        displayName: "Gpt Terra (alias)",
         providerID: "openai",
         catalogID: "gpt-4o-2024-11-20",
       },
@@ -454,6 +558,7 @@ describe("formatReport visual and structural layout", () => {
         key: "opencode-go/deepseek-flash",
         strategy: "latest",
         status: "resolved",
+        displayName: "Deepseek Flash (alias)",
         providerID: "opencode-go",
         catalogID: "deepseek-v3-flash",
       },
@@ -461,6 +566,7 @@ describe("formatReport visual and structural layout", () => {
         key: "opencode-go/glm-flash",
         strategy: "latest",
         status: "resolved",
+        displayName: "Glm Flash (alias)",
         providerID: "opencode-go",
         catalogID: "glm-4-flash",
       },
@@ -468,6 +574,7 @@ describe("formatReport visual and structural layout", () => {
         key: "opencode-go/qwen-flash",
         strategy: "latest",
         status: "resolved",
+        displayName: "Qwen Flash (alias)",
         providerID: "opencode-go",
         catalogID: "qwen-2.5-coder-32b-flash",
       },
@@ -479,15 +586,16 @@ describe("formatReport visual and structural layout", () => {
     // Encabezado y resumen compacto.
     expect(output).toContain("Model aliases (strategy: latest)\n8 aliases · 8 active");
 
-    // Secciones agrupadas por proveedor.
+    // Secciones agrupadas por proveedor; displayName como etiqueta principal
+    // con el modelID del alias entre paréntesis cuando difiere.
     expect(output).toContain(
-      "github-copilot\n  gemini-flash\n    → gemini-2.5-flash\n  sonnet\n    → claude-3-5-sonnet-20241022",
+      "github-copilot\n  Gemini Flash (alias) (gemini-flash)\n    → gemini-2.5-flash\n  Sonnet (alias) (sonnet)\n    → claude-3-5-sonnet-20241022",
     );
     expect(output).toContain(
-      "openai\n  gpt-luna\n    → gpt-4o-mini-2024-07-18\n  gpt-sol\n    → o1-preview\n  gpt-terra\n    → gpt-4o-2024-11-20",
+      "openai\n  Gpt Luna (alias) (gpt-luna)\n    → gpt-4o-mini-2024-07-18\n  Gpt Sol (alias) (gpt-sol)\n    → o1-preview\n  Gpt Terra (alias) (gpt-terra)\n    → gpt-4o-2024-11-20",
     );
     expect(output).toContain(
-      "opencode-go\n  deepseek-flash\n    → deepseek-v3-flash\n  glm-flash\n    → glm-4-flash\n  qwen-flash\n    → qwen-2.5-coder-32b-flash",
+      "opencode-go\n  Deepseek Flash (alias) (deepseek-flash)\n    → deepseek-v3-flash\n  Glm Flash (alias) (glm-flash)\n    → glm-4-flash\n  Qwen Flash (alias) (qwen-flash)\n    → qwen-2.5-coder-32b-flash",
     );
 
     // Sin repetición de prefijos de proveedor en las líneas de alias ni en los destinos.
@@ -511,6 +619,7 @@ describe("formatReport visual and structural layout", () => {
         key: "anthropic/active-one",
         strategy: "latest",
         status: "resolved",
+        displayName: "Active One (alias)",
         providerID: "anthropic",
         catalogID: "claude-3-5-haiku",
       },
@@ -518,6 +627,7 @@ describe("formatReport visual and structural layout", () => {
         key: "anthropic/inactive-one",
         strategy: "latest",
         status: "resolved",
+        displayName: "Inactive One (alias)",
         providerID: "anthropic",
         catalogID: "claude-old",
       },
@@ -525,6 +635,7 @@ describe("formatReport visual and structural layout", () => {
         key: "openai/missing",
         strategy: "latest",
         status: "unresolved",
+        displayName: "Missing (alias)",
         failureKind: "no-eligible",
         failureReason: "no candidate matched pattern",
       },
@@ -538,11 +649,14 @@ describe("formatReport visual and structural layout", () => {
     expect(output).toContain("3 aliases · 1 active · 1 inactive · 1 unresolved");
 
     // Inactivo destacado con etiqueta específica.
-    expect(output).toContain("inactive-one\n    → claude-old (inactive: not in final catalog)");
+    expect(output).toContain("Active One (alias) (active-one)\n    → claude-3-5-haiku");
+    expect(output).toContain(
+      "Inactive One (alias) (inactive-one)\n    → claude-old (inactive: not in final catalog)",
+    );
 
     // Sin resolver destacado con kind y reason.
     expect(output).toContain(
-      "missing\n    → unresolved (no-eligible): no candidate matched pattern",
+      "Missing (alias) (missing)\n    → unresolved (no-eligible): no candidate matched pattern",
     );
   });
 
@@ -552,13 +666,16 @@ describe("formatReport visual and structural layout", () => {
         key: "github-copilot/sonnet",
         strategy: "latest",
         status: "resolved",
+        displayName: "Sonnet (alias)",
         providerID: "github-copilot",
         catalogID: "sonnet-4",
         wireModelID: "sonnet-4-exec",
       },
     ];
     const output = formatReport(rows, new Set(["github-copilot/sonnet"]));
-    expect(output).toContain("sonnet\n    → sonnet-4 (wire model ID: sonnet-4-exec)");
+    expect(output).toContain(
+      "Sonnet (alias) (sonnet)\n    → sonnet-4 (wire model ID: sonnet-4-exec)",
+    );
   });
 
   it("maneja singular correctamente en el resumen", () => {
@@ -567,12 +684,73 @@ describe("formatReport visual and structural layout", () => {
         key: "anthropic/solo",
         strategy: "latest",
         status: "resolved",
+        displayName: "Solo (alias)",
         providerID: "anthropic",
         catalogID: "claude-3-5-sonnet",
       },
     ];
     const output = formatReport(rows, new Set(["anthropic/solo"]));
     expect(output).toContain("1 alias · 1 active");
+    expect(output).toContain("Solo (alias) (solo)\n    → claude-3-5-sonnet");
+  });
+
+  it("muestra el name configurado intacto y omite el paréntesis cuando coincide con el modelID del alias", () => {
+    const rows: AliasReportRow[] = [
+      {
+        key: "anthropic/float",
+        strategy: "latest",
+        status: "resolved",
+        displayName: "Sonnet (floating)",
+        providerID: "anthropic",
+        catalogID: "claude-b",
+      },
+      {
+        key: "anthropic/timeless",
+        strategy: "latest",
+        status: "resolved",
+        displayName: "timeless",
+        providerID: "anthropic",
+        catalogID: "claude-a",
+      },
+    ];
+    const visible = new Set(["anthropic/float", "anthropic/timeless"]);
+    const output = formatReport(rows, visible);
+    // Name explícito intacto como etiqueta principal, con el modelID del alias.
+    expect(output).toContain("Sonnet (floating) (float)\n    → claude-b");
+    // Cuando displayName coincide con el modelID del alias no hay paréntesis.
+    expect(output).toContain("timeless\n    → claude-a");
+    expect(output).not.toContain("timeless (timeless)");
+  });
+
+  it("soporta modelID con barra: el nombre generado proviene del último segmento", () => {
+    const rows: AliasReportRow[] = [
+      {
+        key: "anthropic/claude/sonnet",
+        strategy: "latest",
+        status: "resolved",
+        displayName: "Sonnet (alias)",
+        providerID: "anthropic",
+        catalogID: "claude-b",
+      },
+    ];
+    const output = formatReport(rows, new Set(["anthropic/claude/sonnet"]));
+    expect(output).toContain("Sonnet (alias) (claude/sonnet)\n    → claude-b");
+  });
+
+  it("escapa caracteres de control en el displayName y en el modelID del alias", () => {
+    const rows: AliasReportRow[] = [
+      {
+        key: "anthropic/bad\u001b[31m",
+        strategy: "latest",
+        status: "resolved",
+        displayName: "Bad\u001b[31m",
+        providerID: "anthropic",
+        catalogID: "claude-b",
+      },
+    ];
+    const output = formatReport(rows, new Set(["anthropic/bad\u001b[31m"]));
+    expect(output).toContain("Bad\\u001b[31m (bad\\u001b[31m)\n    → claude-b");
+    expect(output).not.toContain("\u001b");
   });
 });
 
@@ -583,6 +761,7 @@ describe("buildInspectRows structured public primitives", () => {
         key: "github-copilot/gemini-flash",
         strategy: "latest",
         status: "resolved",
+        displayName: "Gemini Flash (alias)",
         providerID: "github-copilot",
         catalogID: "gemini-2.5-flash",
       },
@@ -590,6 +769,7 @@ describe("buildInspectRows structured public primitives", () => {
         key: "github-copilot/sonnet",
         strategy: "latest",
         status: "resolved",
+        displayName: "Sonnet (alias)",
         providerID: "github-copilot",
         catalogID: "claude-3-5-sonnet-20241022",
         wireModelID: "sonnet-4-exec",
@@ -598,6 +778,7 @@ describe("buildInspectRows structured public primitives", () => {
         key: "openai/gpt-luna",
         strategy: "latest",
         status: "resolved",
+        displayName: "Gpt Luna (alias)",
         providerID: "openai",
         catalogID: "gpt-4o-mini-2024-07-18",
       },
@@ -605,6 +786,7 @@ describe("buildInspectRows structured public primitives", () => {
         key: "openai/gpt-sol",
         strategy: "latest",
         status: "resolved",
+        displayName: "Gpt Sol (alias)",
         providerID: "openai",
         catalogID: "o1-preview",
       },
@@ -612,6 +794,7 @@ describe("buildInspectRows structured public primitives", () => {
         key: "openai/gpt-terra",
         strategy: "latest",
         status: "resolved",
+        displayName: "Gpt Terra (alias)",
         providerID: "openai",
         catalogID: "gpt-4o-2024-11-20",
       },
@@ -619,6 +802,7 @@ describe("buildInspectRows structured public primitives", () => {
         key: "opencode-go/deepseek-flash",
         strategy: "latest",
         status: "resolved",
+        displayName: "Deepseek Flash (alias)",
         providerID: "opencode-go",
         catalogID: "deepseek-v3-flash",
       },
@@ -626,6 +810,7 @@ describe("buildInspectRows structured public primitives", () => {
         key: "opencode-go/glm-flash",
         strategy: "latest",
         status: "resolved",
+        displayName: "Glm Flash (alias)",
         providerID: "opencode-go",
         catalogID: "glm-4-flash",
       },
@@ -633,6 +818,7 @@ describe("buildInspectRows structured public primitives", () => {
         key: "opencode-go/qwen-flash",
         strategy: "latest",
         status: "resolved",
+        displayName: "Qwen Flash (alias)",
         providerID: "opencode-go",
         catalogID: "qwen-2.5-coder-32b-flash",
       },
@@ -648,6 +834,7 @@ describe("buildInspectRows structured public primitives", () => {
     expect(terra).toEqual({
       key: "openai/gpt-terra",
       provider: "openai",
+      displayName: "Gpt Terra (alias)",
       alias: "gpt-terra",
       strategy: "latest",
       status: "active",
@@ -659,11 +846,13 @@ describe("buildInspectRows structured public primitives", () => {
     // Verificación de sonnet con wire model ID
     const sonnet = inspectRows.find((r) => r.key === "github-copilot/sonnet");
     expect(sonnet?.wireModelID).toBe("sonnet-4-exec");
+    expect(sonnet?.displayName).toBe("Sonnet (alias)");
 
     // Ninguna fila contiene objetos no serializables ni credenciales
     for (const r of inspectRows) {
       expect(typeof r.key).toBe("string");
       expect(typeof r.provider).toBe("string");
+      expect(typeof r.displayName).toBe("string");
       expect(typeof r.alias).toBe("string");
       expect(r.strategy).toBe("latest");
       expect(r.status).toBe("active");
@@ -676,6 +865,7 @@ describe("buildInspectRows structured public primitives", () => {
         key: "anthropic/pick",
         strategy: "latest",
         status: "resolved",
+        displayName: "Pick (alias)",
         providerID: "anthropic",
         catalogID: "claude-b",
       },
@@ -683,6 +873,7 @@ describe("buildInspectRows structured public primitives", () => {
     // visible no contiene anthropic/pick
     const inspectRows = buildInspectRows(rows, new Set());
     expect(inspectRows[0]?.status).toBe("inactive");
+    expect(inspectRows[0]?.displayName).toBe("Pick (alias)");
   });
 
   it("conserva kind y reason en filas sin resolver", () => {
@@ -691,14 +882,31 @@ describe("buildInspectRows structured public primitives", () => {
         key: "openai/void",
         strategy: "latest",
         status: "unresolved",
+        displayName: "Void (alias)",
         failureKind: "no-eligible",
         failureReason: "no match found",
       },
     ];
     const inspectRows = buildInspectRows(rows, new Set());
     expect(inspectRows[0]?.status).toBe("unresolved");
+    expect(inspectRows[0]?.displayName).toBe("Void (alias)");
     expect(inspectRows[0]?.failureKind).toBe("no-eligible");
     expect(inspectRows[0]?.failureReason).toBe("no match found");
+  });
+
+  it("escapa caracteres de control en el displayName de la fila estructurada", () => {
+    const rows: AliasReportRow[] = [
+      {
+        key: "anthropic/bad",
+        strategy: "latest",
+        status: "resolved",
+        displayName: "Bad\u001b[31m",
+        providerID: "anthropic",
+        catalogID: "claude-b",
+      },
+    ];
+    const inspectRows = buildInspectRows(rows, new Set(["anthropic/bad"]));
+    expect(inspectRows[0]?.displayName).toBe("Bad\\u001b[31m");
   });
 
   it("el handler RPC expone tanto text como rows estructurados en el contrato público", async () => {

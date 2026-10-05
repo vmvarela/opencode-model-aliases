@@ -23,6 +23,7 @@ export const ModelAliasesRpc = {
               properties: {
                 key: { type: "string" },
                 provider: { type: "string" },
+                displayName: { type: "string" },
                 alias: { type: "string" },
                 strategy: { type: "string", enum: ["latest"] },
                 status: { type: "string", enum: ["active", "inactive", "unresolved"] },
@@ -33,7 +34,7 @@ export const ModelAliasesRpc = {
                 failureKind: { type: "string" },
                 failureReason: { type: "string" },
               },
-              required: ["key", "provider", "alias", "strategy", "status"],
+              required: ["key", "provider", "displayName", "alias", "strategy", "status"],
               additionalProperties: false,
             },
           },
