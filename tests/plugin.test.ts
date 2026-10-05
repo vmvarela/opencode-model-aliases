@@ -192,6 +192,84 @@ describe("opencode-model-aliases plugin", () => {
     expect(alias?.time).toEqual({ released: 3_000 });
   });
 
+  it("los filtros de capabilities y minContext deciden la materialización del alias", async () => {
+    const harness = createHarness({
+      sources: [
+        sourceModel({
+          id: "new-small",
+          providerID: "anthropic",
+          name: "New small",
+          released: 9_000,
+          capabilities: { tools: false, input: ["text"], output: ["text"] },
+          limit: { context: 64_000, output: 8_192 },
+        }),
+        sourceModel({
+          id: "old-compatible",
+          providerID: "anthropic",
+          name: "Old compatible",
+          released: 1_000,
+          capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
+          limit: { context: 200_000, output: 8_192 },
+        }),
+      ],
+      options: {
+        aliases: {
+          "anthropic/tools": {
+            match: "anthropic/**",
+            filter: { capabilities: { tools: true } },
+          },
+          "anthropic/context": {
+            match: "anthropic/**",
+            filter: { minContext: 128_000 },
+          },
+          "anthropic/modalities": {
+            match: "anthropic/**",
+            filter: { capabilities: { input: ["image"] } },
+          },
+        },
+      },
+    });
+    await floatingModels.setup(harness.ctx);
+    harness.replay();
+    // The newest incompatible source loses in every requirement dimension.
+    expect(harness.view().get("anthropic/tools")?.modelID).toBe("old-compatible");
+    expect(harness.view().get("anthropic/context")?.modelID).toBe("old-compatible");
+    expect(harness.view().get("anthropic/modalities")?.modelID).toBe("old-compatible");
+  });
+
+  it("un alias sin candidatos con los requisitos configurados avisa con motivo determinista sin ids", async () => {
+    const harness = createHarness({
+      sources: [
+        sourceModel({
+          id: "claude-a",
+          providerID: "anthropic",
+          name: "Claude A",
+          released: 1_000,
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          limit: { context: 200_000, output: 8_192 },
+        }),
+      ],
+      options: {
+        aliases: {
+          "anthropic/audio": {
+            match: "anthropic/**",
+            filter: { capabilities: { input: ["audio"] } },
+          },
+        },
+      },
+    });
+    await floatingModels.setup(harness.ctx);
+    harness.replay();
+    expect(harness.view().get("anthropic/audio")).toBeUndefined();
+    const warning = warnings.find((w) => w.includes('"anthropic/audio"')) ?? "";
+    expect(warning).toContain("unresolved");
+    expect(warning).toContain(
+      "no candidate satisfied all configured requirements (capabilities.input includes [audio])",
+    );
+    // The reason never carries candidate identities or private metadata.
+    expect(warning).not.toContain("claude-a");
+  });
+
   it("el filtro por defecto excluye disabled y beta aunque sean más recientes", async () => {
     const harness = createHarness({
       sources: [

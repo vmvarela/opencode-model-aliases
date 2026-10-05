@@ -139,6 +139,23 @@ Per-alias options:
 - `exclude` — optional string or string array, same qualification rules as `match`.
 - `filter.status` — optional non-empty array of `active`, `alpha`, `beta`. Defaults to
   `["active"]`; `deprecated` and unknown statuses are rejected at startup.
+- `filter.capabilities` — optional object with any of `tools` (boolean), `input` and
+  `output` (arrays of modality strings). `tools` requires exact equality with the
+  candidate's `capabilities.tools`; `input`/`output` follow all-of semantics: every
+  listed modality must be present in the candidate's `capabilities.input`/`output`
+  list. Modality strings are open-ended (whatever OpenCode reports), never validated
+  against a fixed enum. Unknown keys (`filter.capabilities.toolz`), empty modality
+  lists, empty modality strings and non-boolean `tools` are rejected at startup.
+  Candidates missing capability metadata fail any configured requirement.
+- `filter.minContext` — optional positive integer. Requires the candidate's
+  `limit.context` to be greater than or equal to it; fractional, non-positive and
+  non-numeric values are rejected at startup, and candidates missing context metadata
+  fail the requirement.
+- The eligibility filters (`filter.status`, `filter.capabilities`, `filter.minContext`)
+  AND together; they never influence ranking. When matching, enabled candidates exist
+  but none satisfies the configured requirements, the alias stays unresolved with a
+  deterministic reason that names the unmet requirements and their configured
+  thresholds — never model or provider identifiers.
 - `select` — optional; if present it must be `{ "strategy": "latest" }`, which is also the
   default. No other strategy is supported yet.
 - `name` — optional non-empty display name. The configured name is used verbatim, even when

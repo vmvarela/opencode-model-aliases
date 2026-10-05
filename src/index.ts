@@ -2,6 +2,7 @@ export type {
   AliasConfig,
   AllowedStatus,
   Candidate,
+  CapabilityRequirement,
   Checker,
   FilterOptions,
   ModelStatus,

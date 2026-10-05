@@ -1,6 +1,7 @@
 import picomatch from "picomatch";
 import type {
   AllowedStatus,
+  CapabilityRequirement,
   Checker,
   NormalizedAlias,
   NormalizedConfig,
@@ -14,7 +15,8 @@ const ALLOWED_STATUSES: ReadonlySet<string> = new Set(["active", "alpha", "beta"
 /** Keys accepted per configuration level; anything else is a typo and is rejected. */
 const ROOT_KEYS: readonly string[] = ["aliases", "strict", "debug"];
 const ALIAS_KEYS: readonly string[] = ["match", "exclude", "filter", "select", "name"];
-const FILTER_KEYS: readonly string[] = ["status"];
+const FILTER_KEYS: readonly string[] = ["status", "capabilities", "minContext"];
+const CAPABILITY_KEYS: readonly string[] = ["tools", "input", "output"];
 
 /**
  * Single compile and matching semantics. `strictBrackets` rejects unbalanced
@@ -62,6 +64,11 @@ function prefix(fail: ResolveFailure, context: string): ResolveFailure {
 function unknownKeys(value: Record<string, unknown>, supported: readonly string[]): string[] {
   const allowed = new Set(supported);
   return Object.keys(value).filter((key) => !allowed.has(key));
+}
+
+/** Narrows a normalizer result union (`T | undefined | ResolveFailure`). */
+function isFailure(value: unknown): value is ResolveFailure {
+  return typeof value === "object" && value !== null && "kind" in value;
 }
 
 /** Uniform reason for unrecognized keys: it always names the typo. */
@@ -141,6 +148,78 @@ function normalizeFilterStatus(value: unknown, context: string): AllowedStatus[]
   return out;
 }
 
+/** Validates one modality list: non-empty array of non-empty strings. */
+function normalizeModalityList(
+  value: unknown,
+  key: "input" | "output",
+  context: string,
+): readonly string[] | undefined | ResolveFailure {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0) {
+    return failure(
+      "parse-error",
+      `${context}: filter.capabilities.${key} must be a non-empty array of non-empty strings`,
+    );
+  }
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry.length === 0) {
+      return failure(
+        "parse-error",
+        `${context}: filter.capabilities.${key} entries must be non-empty strings`,
+      );
+    }
+  }
+  return [...value];
+}
+
+/**
+ * Capability requirements: an object with optional `tools` (exact boolean),
+ * `input`/`output` (all-of modality lists). Modality strings are open-ended;
+ * unknown keys and malformed values are rejected.
+ */
+function normalizeCapabilityFilter(
+  value: unknown,
+  context: string,
+): CapabilityRequirement | undefined | ResolveFailure {
+  if (value === undefined) return undefined;
+  if (!isPlainObject(value)) {
+    return failure("parse-error", `${context}: filter.capabilities must be an object`);
+  }
+  const extras = unknownKeys(value, CAPABILITY_KEYS);
+  if (extras.length > 0) {
+    return failure(
+      "parse-error",
+      `${context}: filter.capabilities ${unsupportedKeysMessage(extras, CAPABILITY_KEYS)}`,
+    );
+  }
+  if (value.tools === undefined && value.input === undefined && value.output === undefined) {
+    // Only optional fields: no requirement is declared; normalize to no-op so
+    // missing capability metadata is never treated as a failing requirement.
+    return undefined;
+  }
+  if (value.tools !== undefined && typeof value.tools !== "boolean") {
+    return failure("parse-error", `${context}: filter.capabilities.tools must be a boolean`);
+  }
+  const input = normalizeModalityList(value.input, "input", context);
+  if (input !== undefined && "kind" in input) return input;
+  const output = normalizeModalityList(value.output, "output", context);
+  if (output !== undefined && "kind" in output) return output;
+  return {
+    ...(value.tools !== undefined ? { tools: value.tools } : {}),
+    ...(input ? { input } : {}),
+    ...(output ? { output } : {}),
+  };
+}
+
+/** Positive integer context window requirement. */
+function normalizeMinContext(value: unknown, context: string): number | undefined | ResolveFailure {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    return failure("parse-error", `${context}: filter.minContext must be a positive integer`);
+  }
+  return value;
+}
+
 function normalizeSelect(value: unknown, context: string): { strategy: "latest" } | ResolveFailure {
   if (value === undefined) return { strategy: "latest" };
   if (!isPlainObject(value)) {
@@ -205,6 +284,16 @@ function normalizeAlias(key: string, value: unknown): NormalizedAlias | ResolveF
     context,
   );
   if ("kind" in statuses) return statuses;
+  const capabilities = normalizeCapabilityFilter(
+    isPlainObject(filter) ? filter.capabilities : undefined,
+    context,
+  );
+  if (isFailure(capabilities)) return capabilities;
+  const minContext = normalizeMinContext(
+    isPlainObject(filter) ? filter.minContext : undefined,
+    context,
+  );
+  if (isFailure(minContext)) return minContext;
   const select = normalizeSelect(value.select, context);
   if ("kind" in select) return select;
   const name = value.name;
@@ -221,6 +310,8 @@ function normalizeAlias(key: string, value: unknown): NormalizedAlias | ResolveF
     includes: includes.checkers,
     excludes: excludes.checkers,
     statuses,
+    ...(capabilities ? { capabilities } : {}),
+    ...(minContext !== undefined ? { minContext } : {}),
     name: name === undefined ? key : name,
     nameExplicit: name !== undefined,
   };

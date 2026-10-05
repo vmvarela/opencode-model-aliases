@@ -125,6 +125,230 @@ describe("resolveLatest", () => {
     if (!withDep.ok) expect(withDep.failure.kind).toBe("no-eligible");
   });
 
+  it("los requisitos de capabilities hacen perder al más reciente incompatible", () => {
+    const cfg = alias({
+      "anthropic/x": { match: "anthropic/**", filter: { capabilities: { tools: true } } },
+    });
+    const r = resolveLatest(
+      [
+        candidate({
+          id: "new-no-tools",
+          time: { released: 9_000 },
+          capabilities: { tools: false, input: ["text"], output: ["text"] },
+        }),
+        candidate({
+          id: "old-with-tools",
+          time: { released: 1_000 },
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+        }),
+      ],
+      cfg,
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.model.id).toBe("old-with-tools");
+
+    // Exact equality: requiring tools=false rejects candidates with tools=true.
+    const inverse = resolveLatest(
+      [
+        candidate({
+          id: "with-tools",
+          time: { released: 9_000 },
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+        }),
+        candidate({
+          id: "without-tools",
+          time: { released: 1_000 },
+          capabilities: { tools: false, input: ["text"], output: ["text"] },
+        }),
+      ],
+      alias({
+        "anthropic/x": { match: "anthropic/**", filter: { capabilities: { tools: false } } },
+      }),
+    );
+    expect(inverse.ok).toBe(true);
+    if (inverse.ok) expect(inverse.model.id).toBe("without-tools");
+  });
+
+  it("filter.minContext exige limit.context >= umbral y descalifica al más reciente pequeño", () => {
+    const cfg = alias({
+      "anthropic/x": { match: "anthropic/**", filter: { minContext: 200_000 } },
+    });
+    const r = resolveLatest(
+      [
+        candidate({
+          id: "new-small",
+          time: { released: 9_000 },
+          limit: { context: 128_000 },
+        }),
+        candidate({
+          id: "old-large",
+          time: { released: 1_000 },
+          limit: { context: 1_000_000 },
+        }),
+      ],
+      cfg,
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.model.id).toBe("old-large");
+  });
+
+  it("input/output son all-of: faltan una modalidad y el candidato no es elegible", () => {
+    const cfg = alias({
+      "anthropic/x": {
+        match: "anthropic/**",
+        filter: { capabilities: { input: ["text", "image"], output: ["text", "reasoning"] } },
+      },
+    });
+
+    // The candidate with every required modality wins despite being older.
+    const r = resolveLatest(
+      [
+        candidate({
+          id: "new-partial",
+          time: { released: 9_000 },
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+        }),
+        candidate({
+          id: "old-complete",
+          time: { released: 1_000 },
+          capabilities: {
+            tools: true,
+            input: ["text", "image", "pdf"],
+            output: ["text", "reasoning"],
+          },
+        }),
+      ],
+      cfg,
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.model.id).toBe("old-complete");
+
+    // Nobody carries every modality: all-of drops them all.
+    const none = resolveLatest(
+      [
+        candidate({
+          id: "a",
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+        }),
+      ],
+      cfg,
+    );
+    expect(none.ok).toBe(false);
+  });
+
+  it("filter.capabilities vacío declara ningún requisito: candidato sin capabilities es elegible", () => {
+    const cfg = alias({
+      "anthropic/x": { match: "anthropic/**", filter: { capabilities: {} } },
+    });
+    const r = resolveLatest([candidate({ id: "bare", time: { released: 1_000 } })], cfg);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.model.id).toBe("bare");
+
+    // With an empty capability object the only requirement is minContext.
+    const mixed = alias({
+      "anthropic/y": { match: "anthropic/**", filter: { capabilities: {}, minContext: 1 } },
+    });
+    const withContext = resolveLatest(
+      [candidate({ id: "bare", time: { released: 1_000 }, limit: { context: 2 } })],
+      mixed,
+    );
+    expect(withContext.ok).toBe(true);
+    if (withContext.ok) expect(withContext.model.id).toBe("bare");
+  });
+
+  it("metadatos de capabilities o contexto ausentes fallan un requisito configurado", () => {
+    const caps = alias({
+      "anthropic/x": { match: "anthropic/**", filter: { capabilities: { tools: true } } },
+    });
+    const noCaps = resolveLatest([candidate({ id: "bare", time: { released: 1_000 } })], caps);
+    expect(noCaps.ok).toBe(false);
+    if (!noCaps.ok) expect(noCaps.failure.kind).toBe("no-eligible");
+
+    const ctx = alias({ "anthropic/x": { match: "anthropic/**", filter: { minContext: 1 } } });
+    const noLimit = resolveLatest([candidate({ id: "bare", time: { released: 1_000 } })], ctx);
+    expect(noLimit.ok).toBe(false);
+    if (!noLimit.ok) expect(noLimit.failure.kind).toBe("no-eligible");
+
+    // Partial metadata (capabilities present, modality list missing) also fails.
+    const modalities = alias({
+      "anthropic/x": {
+        match: "anthropic/**",
+        filter: { capabilities: { input: ["text"] } },
+      },
+    });
+    const partial = resolveLatest(
+      [candidate({ id: "partial", capabilities: { tools: true } })],
+      modalities,
+    );
+    expect(partial.ok).toBe(false);
+    if (!partial.ok) expect(partial.failure.kind).toBe("no-eligible");
+  });
+
+  it("sin requisitos configurados, candidatos sin capabilities/limit conservan el comportamiento", () => {
+    const cfg = alias({ "anthropic/x": { match: "anthropic/**" } });
+    const r = resolveLatest([candidate({ id: "bare", time: { released: 1_000 } })], cfg);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.model.id).toBe("bare");
+      expect(r.stages.map((s) => s.name)).toEqual(["matching", "filtering", "selection"]);
+    }
+  });
+
+  it("los diagnósticos distinguen filtrado status/enabled de requisitos capability/contexto", () => {
+    // Old diagnostic preserved: everyone dropped by enabled/status.
+    const statusCfg = alias({ "anthropic/x": { match: "anthropic/**" } });
+    const statusOnly = resolveLatest([candidate({ id: "off", enabled: false })], statusCfg);
+    expect(statusOnly.ok).toBe(false);
+    if (!statusOnly.ok) {
+      expect(statusOnly.failure.kind).toBe("no-eligible");
+      expect(statusOnly.failure.reason).toContain("enabled/status");
+      expect(statusOnly.failure.reason).not.toContain("requirements");
+    }
+
+    // Capability/context diagnostic: enabled/status passed, requirements did not.
+    const reqCfg = alias({
+      "anthropic/x": {
+        match: "anthropic/**",
+        filter: {
+          capabilities: { tools: true, input: ["image"] },
+          minContext: 128_000,
+        },
+      },
+    });
+    const req = resolveLatest(
+      [
+        candidate({
+          id: "inadequate",
+          time: { released: 1_000 },
+          capabilities: { tools: false, input: ["text"], output: ["text"] },
+          limit: { context: 64_000 },
+        }),
+      ],
+      reqCfg,
+    );
+    expect(req.ok).toBe(false);
+    if (!req.ok) {
+      expect(req.failure.kind).toBe("no-eligible");
+      // Deterministic, actionable, threshold-bearing and free of ids/private data.
+      expect(req.failure.reason).toBe(
+        "no candidate satisfied all configured requirements " +
+          "(capabilities.tools=true; capabilities.input includes [image]; minContext>=128000)",
+      );
+      expect(req.failure.reason).not.toContain("inadequate");
+      expect(req.failure.reason).not.toContain("anthropic");
+    }
+
+    // Stage count reflects the eligibility outcome (matching kept 1).
+    const stageCfg = alias({
+      "anthropic/x": { match: "anthropic/**", filter: { capabilities: { tools: true } } },
+    });
+    const dropped = resolveLatest(
+      [candidate({ id: "a", capabilities: { tools: false } })],
+      stageCfg,
+    );
+    expect(dropped.ok).toBe(false);
+  });
+
   it("los exclude eliminan por id canónico; los ids pueden contener '/'", () => {
     const cfg = alias({
       "anthropic/suite": { match: "anthropic/**", exclude: ["anthropic/claude-a"] },
