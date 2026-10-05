@@ -929,9 +929,11 @@ describe("buildInspectRows structured public primitives", () => {
 
     const expected =
       "no candidate satisfied all configured requirements " +
-      "(capabilities.tools=true; minContext>=999999)";
+      "(unmet across the candidate set: minContext>=999999)";
     const warning = warnings.find((w) => w.includes('"anthropic/pick"')) ?? "";
     expect(warning).toContain(expected);
+    // Solo se lista el requisito incumplido; tools se cumple y se omite.
+    expect(warning).not.toContain("capabilities.tools");
     // No model/provider ids or private metadata in the diagnostic.
     expect(warning).not.toContain("claude-a");
 

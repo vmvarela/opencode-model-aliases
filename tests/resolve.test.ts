@@ -192,21 +192,21 @@ describe("resolveLatest", () => {
     if (r.ok) expect(r.model.id).toBe("old-large");
   });
 
-  it("input/output son all-of: faltan una modalidad y el candidato no es elegible", () => {
+  it("input all-of aislado: al nuevo le falta una modalidad de entrada y gana el completo más antiguo", () => {
     const cfg = alias({
       "anthropic/x": {
         match: "anthropic/**",
-        filter: { capabilities: { input: ["text", "image"], output: ["text", "reasoning"] } },
+        filter: { capabilities: { input: ["text", "image"] } },
       },
     });
 
-    // The candidate with every required modality wins despite being older.
+    // Todos los candidatos cumplen los demás checks configurados: solo difiere input.
     const r = resolveLatest(
       [
         candidate({
           id: "new-partial",
           time: { released: 9_000 },
-          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          capabilities: { tools: true, input: ["text"], output: ["text", "reasoning"] },
         }),
         candidate({
           id: "old-complete",
@@ -223,12 +223,52 @@ describe("resolveLatest", () => {
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.model.id).toBe("old-complete");
 
-    // Nobody carries every modality: all-of drops them all.
+    // Nadie lleva todas las modalidades de entrada: all-of los descarta.
     const none = resolveLatest(
       [
         candidate({
           id: "a",
-          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          capabilities: { tools: true, input: ["text"], output: ["text", "reasoning"] },
+        }),
+      ],
+      cfg,
+    );
+    expect(none.ok).toBe(false);
+  });
+
+  it("output all-of aislado: al nuevo le falta una modalidad de salida y gana el completo más antiguo", () => {
+    const cfg = alias({
+      "anthropic/x": {
+        match: "anthropic/**",
+        filter: { capabilities: { output: ["text", "reasoning"] } },
+      },
+    });
+
+    // Todos los candidatos cumplen los demás checks configurados: solo difiere output.
+    const r = resolveLatest(
+      [
+        candidate({
+          id: "new-partial",
+          time: { released: 9_000 },
+          capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
+        }),
+        candidate({
+          id: "old-complete",
+          time: { released: 1_000 },
+          capabilities: { tools: true, input: ["text", "image"], output: ["text", "reasoning"] },
+        }),
+      ],
+      cfg,
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.model.id).toBe("old-complete");
+
+    // Nadie lleva todas las modalidades de salida: all-of los descarta.
+    const none = resolveLatest(
+      [
+        candidate({
+          id: "a",
+          capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
         }),
       ],
       cfg,
@@ -332,7 +372,8 @@ describe("resolveLatest", () => {
       // Deterministic, actionable, threshold-bearing and free of ids/private data.
       expect(req.failure.reason).toBe(
         "no candidate satisfied all configured requirements " +
-          "(capabilities.tools=true; capabilities.input includes [image]; minContext>=128000)",
+          "(unmet across the candidate set: capabilities.tools=true; " +
+          "capabilities.input includes [image]; minContext>=128000)",
       );
       expect(req.failure.reason).not.toContain("inadequate");
       expect(req.failure.reason).not.toContain("anthropic");
@@ -347,6 +388,104 @@ describe("resolveLatest", () => {
       stageCfg,
     );
     expect(dropped.ok).toBe(false);
+  });
+
+  it("el diagnóstico aísla un único requisito incumplido aunque haya otros configurados", () => {
+    const cfg = alias({
+      "anthropic/x": {
+        match: "anthropic/**",
+        filter: {
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          minContext: 1_000,
+        },
+      },
+    });
+    // El candidato cumple input, output y minContext: solo tools está incumplido.
+    const r = resolveLatest(
+      [
+        candidate({
+          id: "no-tools",
+          capabilities: { tools: false, input: ["text"], output: ["text"] },
+          limit: { context: 5_000 },
+        }),
+      ],
+      cfg,
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.failure.reason).toContain("capabilities.tools=true");
+      expect(r.failure.reason).not.toContain("capabilities.input");
+      expect(r.failure.reason).not.toContain("capabilities.output");
+      expect(r.failure.reason).not.toContain("minContext");
+    }
+  });
+
+  it("un requisito minContext incumplido es el único listado en el diagnóstico", () => {
+    const cfg = alias({
+      "anthropic/x": {
+        match: "anthropic/**",
+        filter: {
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          minContext: 200_000,
+        },
+      },
+    });
+    // El candidato cumple todos los checks de capabilities: solo minContext está incumplido.
+    const r = resolveLatest(
+      [
+        candidate({
+          id: "small",
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          limit: { context: 8_000 },
+        }),
+      ],
+      cfg,
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.failure.reason).toContain("minContext>=200000");
+      expect(r.failure.reason).not.toContain("capabilities");
+    }
+  });
+
+  it("agrega y deduplica los requisitos incumplidos del conjunto, en orden fijo e independiente de la fuente", () => {
+    const cfg = alias({
+      "anthropic/x": {
+        match: "anthropic/**",
+        filter: {
+          capabilities: { tools: true, input: ["text", "image"], output: ["text", "reasoning"] },
+          minContext: 100_000,
+        },
+      },
+    });
+    // Un candidato incumple solo tools, el otro tools y minContext; ambos
+    // cumplen los checks de input/output configurados, así que se omiten.
+    const makeCandidates = () => [
+      candidate({
+        id: "a",
+        time: { released: 1_000 },
+        capabilities: { tools: false, input: ["text", "image"], output: ["text", "reasoning"] },
+        limit: { context: 200_000 },
+      }),
+      candidate({
+        id: "c",
+        time: { released: 2_000 },
+        capabilities: { tools: false, input: ["text", "image"], output: ["text", "reasoning"] },
+        limit: { context: 10_000 },
+      }),
+    ];
+    const expected =
+      "no candidate satisfied all configured requirements " +
+      "(unmet across the candidate set: capabilities.tools=true; minContext>=100000)";
+
+    const first = resolveLatest(makeCandidates(), cfg);
+    expect(first.ok).toBe(false);
+    if (!first.ok) expect(first.failure.reason).toBe(expected);
+
+    // Invertir el orden del catálogo fuente produce exactamente la misma razón.
+    const reversed = resolveLatest([...makeCandidates()].reverse(), cfg);
+    expect(reversed.ok).toBe(false);
+    if (!reversed.ok) expect(reversed.failure.reason).toBe(expected);
   });
 
   it("los exclude eliminan por id canónico; los ids pueden contener '/'", () => {

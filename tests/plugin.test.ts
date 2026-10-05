@@ -264,7 +264,8 @@ describe("opencode-model-aliases plugin", () => {
     const warning = warnings.find((w) => w.includes('"anthropic/audio"')) ?? "";
     expect(warning).toContain("unresolved");
     expect(warning).toContain(
-      "no candidate satisfied all configured requirements (capabilities.input includes [audio])",
+      "no candidate satisfied all configured requirements " +
+        "(unmet across the candidate set: capabilities.input includes [audio])",
     );
     // The reason never carries candidate identities or private metadata.
     expect(warning).not.toContain("claude-a");

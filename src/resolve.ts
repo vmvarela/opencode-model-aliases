@@ -27,48 +27,53 @@ function containsAll(modalityList: unknown, required: readonly string[]): boolea
 }
 
 /**
- * Eligibility requirement checks (never ranking). Missing capability or
- * context metadata fails a configured requirement.
+ * Claves de los requisitos configurados que un candidato incumple
+ * individualmente, en orden fijo (tools, input, output, minContext).
+ * Metadatos de capability o contexto ausentes incumplen el requisito
+ * correspondiente.
  */
-function meetsRequirements(candidate: Candidate, alias: NormalizedAlias): boolean {
+function unmetRequirements(candidate: Candidate, alias: NormalizedAlias): string[] {
+  const unmet: string[] = [];
   const requirements = alias.capabilities;
+  const capabilities = candidate.capabilities;
   if (requirements) {
-    const capabilities = candidate.capabilities;
-    if (!capabilities) return false;
-    if (requirements.tools !== undefined && capabilities.tools !== requirements.tools) {
-      return false;
+    if (requirements.tools !== undefined && capabilities?.tools !== requirements.tools) {
+      unmet.push("tools");
     }
-    if (requirements.input && !containsAll(capabilities.input, requirements.input)) return false;
-    if (requirements.output && !containsAll(capabilities.output, requirements.output)) return false;
+    if (requirements.input && !containsAll(capabilities?.input, requirements.input)) {
+      unmet.push("input");
+    }
+    if (requirements.output && !containsAll(capabilities?.output, requirements.output)) {
+      unmet.push("output");
+    }
   }
   if (alias.minContext !== undefined) {
     const context = candidate.limit?.context;
     if (typeof context !== "number" || !Number.isFinite(context) || context < alias.minContext) {
-      return false;
+      unmet.push("minContext");
     }
   }
-  return true;
+  return unmet;
 }
 
 /**
- * Deterministic, leak-free description of the configured requirements:
- * names and thresholds only, never model/provider ids or private metadata.
+ * Descripción determinista y sin fugas de las claves de requisitos dadas, en
+ * orden fijo y con sus valores configurados: solo nombres y umbrales, nunca
+ * ids de modelo/provider ni metadatos privados.
  */
-function requirementSummary(alias: NormalizedAlias): string {
+function requirementSummary(alias: NormalizedAlias, keys: ReadonlySet<string>): string {
   const parts: string[] = [];
   const requirements = alias.capabilities;
-  if (requirements) {
-    if (requirements.tools !== undefined) {
-      parts.push(`capabilities.tools=${requirements.tools}`);
-    }
-    if (requirements.input) {
-      parts.push(`capabilities.input includes [${requirements.input.join(", ")}]`);
-    }
-    if (requirements.output) {
-      parts.push(`capabilities.output includes [${requirements.output.join(", ")}]`);
-    }
+  if (requirements?.tools !== undefined && keys.has("tools")) {
+    parts.push(`capabilities.tools=${requirements.tools}`);
   }
-  if (alias.minContext !== undefined) {
+  if (requirements?.input && keys.has("input")) {
+    parts.push(`capabilities.input includes [${requirements.input.join(", ")}]`);
+  }
+  if (requirements?.output && keys.has("output")) {
+    parts.push(`capabilities.output includes [${requirements.output.join(", ")}]`);
+  }
+  if (alias.minContext !== undefined && keys.has("minContext")) {
     parts.push(`minContext>=${alias.minContext}`);
   }
   return parts.join("; ");
@@ -112,7 +117,9 @@ export function resolveLatest<T extends Candidate>(
   const statusEligible = matched.filter(
     (candidate) => candidate.enabled !== false && alias.statuses.includes(candidate.status),
   );
-  const eligible = statusEligible.filter((candidate) => meetsRequirements(candidate, alias));
+  const eligible = statusEligible.filter(
+    (candidate) => unmetRequirements(candidate, alias).length === 0,
+  );
   stages.push({ name: "filtering", accepted: eligible.length });
   if (eligible.length === 0) {
     // Keep the old diagnostic when enabled/status checks already dropped
@@ -123,11 +130,18 @@ export function resolveLatest<T extends Candidate>(
         failure: failure("no-eligible", "no candidate passed enabled/status filtering"),
       };
     }
+    // Agrega las claves de requisitos incumplidos individualmente en todo el
+    // conjunto de candidatos, deduplicadas, para listar solo los checks que
+    // realmente fallan.
+    const unmet = new Set<string>();
+    for (const candidate of statusEligible) {
+      for (const key of unmetRequirements(candidate, alias)) unmet.add(key);
+    }
     return {
       ok: false,
       failure: failure(
         "no-eligible",
-        `no candidate satisfied all configured requirements (${requirementSummary(alias)})`,
+        `no candidate satisfied all configured requirements (unmet across the candidate set: ${requirementSummary(alias, unmet)})`,
       ),
     };
   }
