@@ -11,15 +11,15 @@ import { failure, type ResolveFailure } from "./errors.js";
 const DEFAULT_STATUSES: readonly AllowedStatus[] = ["active"];
 const ALLOWED_STATUSES: ReadonlySet<string> = new Set(["active", "alpha", "beta"]);
 
-/** Claves admitidas por nivel de configuración; el resto es errata y se rechaza. */
+/** Keys accepted per configuration level; anything else is a typo and is rejected. */
 const ROOT_KEYS: readonly string[] = ["aliases", "strict", "debug"];
 const ALIAS_KEYS: readonly string[] = ["match", "exclude", "filter", "select", "name"];
 const FILTER_KEYS: readonly string[] = ["status"];
 
 /**
- * Semántica única de compilación y matching. `strictBrackets` rechaza
- * corchetes desbalanceados y `debug: true` obliga a picomatch a lanzar al
- * construir la regex (p. ej. rangos invertidos como [z-a]) en vez de aceptarlos.
+ * Single compile and matching semantics. `strictBrackets` rejects unbalanced
+ * brackets and `debug: true` forces picomatch to throw while building the
+ * regex (e.g. inverted ranges like [z-a]) instead of accepting them.
  */
 const MATCHER_OPTIONS = {
   dot: true,
@@ -28,7 +28,7 @@ const MATCHER_OPTIONS = {
   debug: true,
 } as const;
 
-/** `<provider>/<model>`; proveedor antes del primer `/`, el modelo puede contener `/`. */
+/** `<provider>/<model>`; provider before the first `/`; the model may contain `/`. */
 export type Selector = { provider: string; modelID: string };
 
 export function splitSelector(value: string): Selector | ResolveFailure {
@@ -44,12 +44,12 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Metacaracteres de picomatch, incluida la sintaxis extglob (+ @ ! ( ) |),
- * escapes y alternaciones. Un proveedor válido no puede contenerlos.
+ * picomatch metacharacters, including the extglob syntax (+ @ ! ( ) |),
+ * escapes and alternations. A valid provider cannot contain them.
  */
 const PROVIDER_META = /[*?[\]{}()!+@|\\]/;
 
-/** Un proveedor literal no contiene sintaxis extglob, glob ni escapes. */
+/** A literal provider contains no extglob, glob or escape syntax. */
 export function isLiteralProvider(provider: string): boolean {
   return provider.length > 0 && !PROVIDER_META.test(provider);
 }
@@ -58,18 +58,18 @@ function prefix(fail: ResolveFailure, context: string): ResolveFailure {
   return failure(fail.kind, `${context}: ${fail.reason}`);
 }
 
-/** Claves propias enumerables fuera de la lista admitida. */
+/** Own enumerable keys outside the supported list. */
 function unknownKeys(value: Record<string, unknown>, supported: readonly string[]): string[] {
   const allowed = new Set(supported);
   return Object.keys(value).filter((key) => !allowed.has(key));
 }
 
-/** Motivo uniforme para claves no reconocidas: siempre nombra la errata. */
+/** Uniform reason for unrecognized keys: it always names the typo. */
 function unsupportedKeysMessage(keys: readonly string[], supported: readonly string[]): string {
   return `unsupported key(s): ${keys.join(", ")} (supported: ${supported.join(", ")})`;
 }
 
-/** Compila un glob totalmente cualificado validando estrictamente; nunca lanza. */
+/** Compiles a fully qualified glob with strict validation; it never throws. */
 function compileGlob(pattern: string, context: string): Checker | ResolveFailure {
   if (pattern.includes("#")) {
     return failure("parse-error", `${context}: pattern "${pattern}" must not contain "#"`);
@@ -110,7 +110,7 @@ function normalizePatternList(
     if ("kind" in compiled) return compiled;
     const head = splitSelector(entry);
     if ("kind" in head) return prefix(head, context);
-    // Aislamiento por alias: el proveedor literal debe coincidir exactamente.
+    // Per-alias isolation: the literal provider must match exactly.
     if (head.provider !== provider) {
       return failure(
         "parse-error",
@@ -232,8 +232,8 @@ export function normalizeOptions(
   if (!isPlainObject(options)) {
     return { ok: false, failure: failure("parse-error", "options must be an object") };
   }
-  // Erratas de raíz (p. ej. "strcit") se rechazan antes de cualquier otra
-  // validación: el whitelisting silencioso las ocultaría.
+  // Root typos (e.g. "strcit") are rejected before any other validation:
+  // silent whitelisting would hide them.
   const rootExtras = unknownKeys(options, ROOT_KEYS);
   if (rootExtras.length > 0) {
     return {

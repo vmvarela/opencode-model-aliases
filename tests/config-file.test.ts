@@ -35,10 +35,10 @@ describe("separate JSONC config file", () => {
     writeConfigFile(
       project,
       [
-        "// Configuración del plugin, con comentarios y trailing commas.",
+        "// Plugin configuration, with comments and trailing commas.",
         "{",
         '  "aliases": {',
-        '    "anthropic/float": { "match": ["anthropic/claude-*"] }, // coma final',
+        '    "anthropic/float": { "match": ["anthropic/claude-*"] }, // trailing comma',
         "  },",
         '  "strict": true,',
         '  "debug": true,',
@@ -48,12 +48,12 @@ describe("separate JSONC config file", () => {
     const harness = createHarness({ sources: SOURCES(), directory: project });
     await floatingModels.setup(harness.ctx);
     harness.view();
-    // latest por defecto: claude-b (released 2000) gana.
+    // Default latest strategy: claude-b (released 2000) wins.
     expect(harness.view().get("anthropic/float")?.modelID).toBe("claude-b");
-    // debug:true llega desde el archivo.
+    // debug:true comes from the file.
     expect(warnings.some((w) => w.includes("[opencode-model-aliases] [debug]"))).toBe(true);
 
-    // strict:true del archivo: un alias sin resolver rechaza el setup.
+    // strict:true from the file: an unresolved alias rejects the setup.
     const strictDir = path.join(tempRoot, "strict");
     mkdirSync(strictDir, { recursive: true });
     writeConfigFile(
@@ -89,11 +89,11 @@ describe("separate JSONC config file", () => {
       options: { strict: false },
       directory: project,
     });
-    // strict inline false anula el true del archivo: setup tolerante resuelve.
+    // Inline false overrides the file's true: tolerant setup resolves.
     await expect(floatingModels.setup(harness.ctx)).resolves.toBeTypeOf("function");
-    // El alias sin resolver avisa en tolerante...
+    // The unresolved alias warns in tolerant mode...
     expect(warnings.some((w) => w.includes('alias "anthropic/void" unresolved'))).toBe(true);
-    // ...y debug:true sigue viniendo del archivo para el alias resuelto.
+    // ...and debug:true still comes from the file for the resolved alias.
     expect(warnings.some((w) => w.includes('alias "anthropic/good"'))).toBe(true);
     expect(warnings.some((w) => w.includes("[debug]"))).toBe(true);
   });
@@ -116,7 +116,7 @@ describe("separate JSONC config file", () => {
       sources: SOURCES(),
       options: {
         aliases: {
-          "anthropic/both": { match: "anthropic/claude-a" }, // reemplazo completo
+          "anthropic/both": { match: "anthropic/claude-a" }, // full replacement
           "anthropic/only-inline": { match: "anthropic/claude-b" },
         },
       },
@@ -124,9 +124,9 @@ describe("separate JSONC config file", () => {
     });
     await floatingModels.setup(harness.ctx);
     const view = harness.view();
-    // Del archivo.
+    // From the file.
     expect(view.get("anthropic/only-file")?.modelID).toBe("claude-b");
-    // Inline: reemplazo completo del registro (sin name heredado del archivo).
+    // Inline: full replacement of the record (no name inherited from the file).
     expect(view.get("anthropic/both")?.modelID).toBe("claude-a");
     expect(view.get("anthropic/both")?.name).toBe("Both (alias)");
     // Inline-only.
@@ -147,11 +147,11 @@ describe("separate JSONC config file", () => {
     const harness = createHarness({ sources: SOURCES(), directory: project });
     (harness.ctx as { options: unknown }).options = inlineOptions;
     await floatingModels.setup(harness.ctx);
-    // Objetos congelados: cualquier mutación habría lanzado o alterado keys.
+    // Frozen objects: any mutation would have thrown or altered keys.
     expect(Object.keys(inlineOptions)).toEqual(["aliases"]);
     expect(Object.keys(inlineAliases)).toEqual(["anthropic/float"]);
     expect(Object.isFrozen(inlineOptions.aliases)).toBe(true);
-    // El alias materializado usa el registro inline completo.
+    // The materialized alias uses the complete inline record.
     expect(harness.view().get("anthropic/float")?.name).toBe("Float (alias)");
     expect(harness.view().get("anthropic/float")?.modelID).toBe("claude-a");
   });
@@ -189,8 +189,8 @@ describe("separate JSONC config file", () => {
   it("JSONC malformado (aunque el parser recupere datos) rechaza el setup sin registrar", async () => {
     const project = path.join(tempRoot, "proj");
     mkdirSync(project, { recursive: true });
-    // Falta cerrar el objeto: el parser tolerante recupera datos parciales
-    // pero reporta errores, y esos errores deben fallar.
+    // Missing object close: the tolerant parser recovers partial data
+    // but reports errors, and those errors must fail.
     writeConfigFile(project, '{ "aliases": { "anthropic/float": { "match": "anthropic/**" } }');
     const harness = createHarness({ sources: SOURCES(), directory: project });
     await expect(floatingModels.setup(harness.ctx)).rejects.toThrow(/malformed JSONC/);
@@ -253,7 +253,7 @@ describe("separate JSONC config file", () => {
   });
 
   it("archivo sin permisos (EACCES) falla con ruta y código", async () => {
-    if (process.getuid?.() === 0) return; // root ignora chmod; omitir en ese caso
+    if (process.getuid?.() === 0) return; // root ignores chmod; skip in that case
     const project = path.join(tempRoot, "proj");
     const file = writeConfigFile(project, "{ }");
     chmodSync(file, 0o000);
@@ -285,8 +285,8 @@ describe("separate JSONC config file", () => {
     if (result.ok && result.file) {
       expect(isPlainObject(result.file.options.aliases)).toBe(true);
       expect(result.file.options.strict).toBe(true);
-      // Las claves raíz desconocidas se preservan en las options crudas:
-      // normalizeOptions las rechazará como parse-error.
+      // Unknown root keys are preserved in the raw options:
+      // normalizeOptions will reject them as parse-error.
       expect(result.file.options["unknown"]).toBe(1);
       expect(
         result.file.path.endsWith(path.join(".opencode", "opencode-model-aliases.jsonc")),
@@ -312,13 +312,13 @@ describe("separate JSONC config file", () => {
     writeConfigFile(project, '{ "aliases": { "anthropic/float": { "match": "anthropic/**" } } }');
     const harness = createHarness({ sources: SOURCES(), directory: project });
     await floatingModels.setup(harness.ctx);
-    // Un único registro RPC con la definición del contrato.
+    // A single RPC registration with the contract's definition.
     expect(harness.rpc.definitions).toHaveLength(1);
     expect(harness.rpc.registrations[0]?.disposed).toBe(false);
     const text = await harness.inspect();
-    // Sección del proveedor con el par alias→target exacto.
+    // Provider section with the exact alias→target pair.
     expect(text).toContain("anthropic\n  Float (alias) (float)\n    → claude-b");
-    // El estado activo se resume en la cabecera, no por alias.
+    // Active status is summarized in the header, not per alias.
     expect(text).toContain("1 alias · 1 active");
   });
 });

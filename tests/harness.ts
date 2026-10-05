@@ -2,7 +2,7 @@ import type { Model, Plugin } from "@opencode/plugin";
 
 export type ModelInfo = Model.Info;
 
-/** Fábrica de Model.Info de prueba; las marcas de effect exigen un único cast. */
+/** Test Model.Info factory; the effect marks require a single cast. */
 export function sourceModel(overrides: {
   id: string;
   providerID: string;
@@ -52,11 +52,11 @@ export function sourceModel(overrides: {
 export type RpcHandlerMap = Record<string, (input: unknown, context: unknown) => Promise<unknown>>;
 
 export interface RpcSpy {
-  /** Definiciones registradas (en orden). */
+  /** Registered definitions (in order). */
   definitions: unknown[];
-  /** Mapas de handlers registrados, alineados con `definitions`. */
+  /** Registered handler maps, aligned with `definitions`. */
   handlers: RpcHandlerMap[];
-  /** Altas de registro, con marca de dispose (una por registro). */
+  /** Registration entries, with dispose flag (one per registration). */
   registrations: Array<{ disposed: boolean }>;
 }
 
@@ -69,24 +69,26 @@ export interface Counters {
 }
 
 /**
- * Harness fiel al host v2 (State.get) compartido por los tests backend:
- * - `replay()` invoca los callbacks en orden y propaga los throws (útil directo).
- * - `model.list()` reconstruye el estado derivado desde el catálogo fuente,
- *   ejecuta los callbacks en orden y, si uno falla, descarta las ediciones
- *   parciales reconstruyendo desde la fuente, separa el registro fallido
- *   (dispose) y resuelve la lista con éxito igualmente. Devuelve el sobre
- *   real del host v2: `{ location, data }`.
- * - `dispose()` separa el callback registrado y es idempotente (modelo y RPC).
- * - `inspect()` invoca el handler `inspect` del último RPC registrado.
- * - Fallos de list: `failNextList` (un tiro) y `failEveryList` (hasta
- *   `restoreList`), para simular refrescos fallidos del host.
+ * Harness faithful to the v2 host (State.get) shared by the backend tests:
+ * - `replay()` invokes the callbacks in order and propagates throws
+ *   (directly useful).
+ * - `model.list()` rebuilds the derived state from the source catalog,
+ *   runs the callbacks in order and, if one fails, discards the partial
+ *   edits by rebuilding from the source, detaches the failed registration
+ *   (dispose) and still resolves the list successfully. Returns the real
+ *   v2 host envelope: `{ location, data }`.
+ * - `dispose()` detaches the registered callback and is idempotent
+ *   (model and RPC).
+ * - `inspect()` invokes the `inspect` handler of the last registered RPC.
+ * - List failures: `failNextList` (one shot) and `failEveryList` (until
+ *   `restoreList`), to simulate failed host refreshes.
  */
 export function createHarness(input: {
   sources?: ModelInfo[];
   options?: Record<string, unknown>;
-  /** Directorio del host para el lookup del archivo de config; nunca el repo real. */
+  /** Host directory for the config file lookup; never the real repo. */
   directory?: string;
-  /** Si se define, ctx.rpc.register rechaza con este error. */
+  /** If set, ctx.rpc.register rejects with this error. */
   rpcRegisterError?: unknown;
 }) {
   const source = new Map<string, ModelInfo>();
@@ -129,7 +131,7 @@ export function createHarness(input: {
   };
 
   const replay = () => {
-    // Semántica v2: cada repetición parte del catálogo fuente fresco.
+    // v2 semantics: each replay starts from the fresh source catalog.
     working = freshFromSource();
     for (const callback of [...callbacks]) callback(editor);
   };
@@ -168,8 +170,8 @@ export function createHarness(input: {
           try {
             callback(editor);
           } catch {
-            // Host v2: el fallo del transform deshabilita el plugin; el estado
-            // parcial se descarta reconstruyendo desde la fuente.
+            // Host v2: a transform failure disables the plugin; the partial
+            // state is discarded by rebuilding from the source.
             detach(callback);
             working = freshFromSource();
           }
@@ -230,19 +232,19 @@ export function createHarness(input: {
 
   return {
     ctx,
-    /** Estado visible tras la última repetición/lista (derivado). */
+    /** Visible state after the last replay/list (derived). */
     view: () => working,
     callbacks,
-    /** Catálogo fuente; simula refrescos del proveedor. */
+    /** Source catalog; simulates provider refreshes. */
     addSource: (model: ModelInfo) =>
       source.set(`${model.providerID}/${model.id}`, structuredClone(model)),
     removeSource: (providerID: string, id: string) => source.delete(`${providerID}/${id}`),
     replay,
-    /** Un tiro: el siguiente list() falla. */
+    /** One-shot: the next list() fails. */
     failNextList: (error: unknown) => {
       listFailure = error;
     },
-    /** Persistente: todo list() falla hasta `restoreList()`. */
+    /** Sticky: every list() fails until `restoreList()`. */
     failEveryList: (error: unknown) => {
       stickyListFailure = error;
     },

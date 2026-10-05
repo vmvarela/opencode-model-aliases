@@ -1,9 +1,8 @@
 const ALIAS_SUFFIX = " (alias)";
 
 /**
- * Nombre visible por defecto, determinista a partir del modelID del alias
- * (último segmento, separadores como espacios, primera letra mayúscula):
- * "sonnet" → "Sonnet (alias)".
+ * Default visible name, deterministic from the alias modelID (last segment,
+ * separators as spaces, first letter capitalized): "sonnet" → "Sonnet (alias)".
  */
 export function defaultAliasName(modelID: string): string {
   const segment = modelID.split("/").pop() ?? "";
@@ -16,8 +15,8 @@ export function defaultAliasName(modelID: string): string {
 }
 
 /**
- * Nombre visible de un alias: el `name` configurado se usa intacto; si se
- * omite, se genera con la MISMA regla que la materialización del catálogo.
+ * Visible name of an alias: the configured `name` is kept intact; when it is
+ * omitted, it is generated with the SAME rule as catalog materialization.
  */
 export function aliasDisplayName(alias: {
   readonly name: string;

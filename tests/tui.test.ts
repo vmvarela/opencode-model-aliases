@@ -386,7 +386,7 @@ describe("TUI dialog navigation: select list and detail view", () => {
         text: "Summary text",
         rows: SAMPLE_ACTUAL8_ROWS,
       }),
-      selectReturnValue: undefined, // Simula cancelación
+      selectReturnValue: undefined, // Simulates cancellation
     });
     plugin.setup(harness.context);
     const command = harness.activeCommands[0];
@@ -398,7 +398,7 @@ describe("TUI dialog navigation: select list and detail view", () => {
     expect(call?.title).toBe("Model aliases");
     expect(call?.options).toHaveLength(8);
 
-    // Verificación de categorías por proveedor
+    // Provider category verification
     const categories = call?.options.map((o) => o.category);
     expect(categories).toEqual([
       "github-copilot",
@@ -411,7 +411,7 @@ describe("TUI dialog navigation: select list and detail view", () => {
       "opencode-go",
     ]);
 
-    // Verificación de títulos compactos (sin prefijo de proveedor)
+    // Compact title verification (no provider prefix)
     expect(call?.options.map((o) => o.title)).toEqual([
       "Gemini Flash (alias)",
       "Sonnet (alias)",
@@ -423,7 +423,7 @@ describe("TUI dialog navigation: select list and detail view", () => {
       "Qwen Flash (alias)",
     ]);
 
-    // Verificación de valores estables (claves completas)
+    // Verification of stable values (full keys)
     expect(call?.options.map((o) => o.value)).toEqual([
       "github-copilot/gemini-flash",
       "github-copilot/sonnet",
@@ -435,11 +435,11 @@ describe("TUI dialog navigation: select list and detail view", () => {
       "opencode-go/qwen-flash",
     ]);
 
-    // Ninguna fila activa lleva etiqueta redundante (active)
+    // No active row carries a redundant (active) label
     const activeSonnet = call?.options.find((o) => o.value === "github-copilot/sonnet");
     expect(activeSonnet?.footer).toBeUndefined();
 
-    // Las filas con problemas marcan su pie distintivamente
+    // Problem rows mark their footer distinctively
     const inactiveGlm = call?.options.find((o) => o.value === "opencode-go/glm-flash");
     expect(inactiveGlm?.footer).toBe("inactive");
 
@@ -447,7 +447,7 @@ describe("TUI dialog navigation: select list and detail view", () => {
     expect(unresolvedQwen?.footer).toBe("unresolved");
     expect(unresolvedQwen?.description).toContain("no-eligible");
 
-    // Cancelar el select es un no-op (no abre alert posterior)
+    // Cancelling the select is a no-op (no alert opens afterwards)
     expect(harness.alerts).toHaveLength(0);
   });
 
@@ -811,7 +811,7 @@ describe("TUI security, validation, and error boundaries", () => {
         rows: [
           {
             key: "github-copilot/sonnet",
-            // falta displayName
+            // missing displayName
             provider: "github-copilot",
             alias: "sonnet",
             strategy: "latest",

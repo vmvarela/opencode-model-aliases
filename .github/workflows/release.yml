@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 
-# Un solo release de cada vez en la misma rama; nunca se cancela a medias.
+# Only one release at a time on the same branch; it is never canceled midway.
 concurrency:
   group: release-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -52,8 +52,8 @@ jobs:
       - name: Offline release checks
         run: pnpm run check:release
 
-      # Nota: el plugin de npm usa OIDC (trusted publishing); no hace falta
-      # ningún token para npm.
+      # Note: the npm plugin uses OIDC (trusted publishing); no token is
+      # needed for npm.
       - name: Release
         run: pnpm exec semantic-release
         env:

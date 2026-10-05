@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Candidate, NormalizedAlias, Options } from "../src/index.js";
 import { normalizeOptions, resolveLatest } from "../src/index.js";
 
-/** Candidato mínimo conforme a Candidate con overrides convenientes. */
+/** Minimal candidate conforming to Candidate with convenient overrides. */
 function candidate(overrides: Partial<Candidate> & { id: string; providerID?: string }): Candidate {
   return {
     providerID: overrides.providerID ?? "anthropic",
@@ -13,7 +13,7 @@ function candidate(overrides: Partial<Candidate> & { id: string; providerID?: st
   };
 }
 
-/** Normaliza opciones y devuelve el primer alias (o lanza el fallo como error). */
+/** Normalizes options and returns the first alias (or throws the failure as an error). */
 function alias(raw: Record<string, unknown>): NormalizedAlias {
   const r = normalizeOptions({ aliases: raw } as unknown as Options);
   if (!r.ok) throw new Error(`normalize failed: ${r.failure.reason}`);
@@ -40,7 +40,7 @@ describe("resolveLatest", () => {
     const cfg = alias({ "anthropic/x": { match: "anthropic/**" } });
     const ts = 5_000;
 
-    // Mismo timestamp: por unidades de código, zeta > beta, descendente.
+    // Same timestamp: by code units, zeta > beta, descending.
     const ties = resolveLatest(
       [
         candidate({ id: "beta", time: { released: ts } }),
@@ -51,7 +51,7 @@ describe("resolveLatest", () => {
     expect(ties.ok).toBe(true);
     if (ties.ok) expect(ties.model.id).toBe("zeta");
 
-    // Timestamp más reciente gana aunque el id ordene antes léxicamente.
+    // A more recent timestamp wins even when the id sorts earlier lexically.
     const order = resolveLatest(
       [
         candidate({ id: "zeta", time: { released: ts } }),
@@ -116,7 +116,7 @@ describe("resolveLatest", () => {
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.model.id).toBe("alpha-one");
 
-    // Un deprecated más reciente que todo lo demás sigue filtrado.
+    // A deprecated newer than everything else stays filtered.
     const withDep = resolveLatest(
       [candidate({ id: "dep", status: "deprecated", time: { released: 9_999 } })],
       cfg,
@@ -156,8 +156,8 @@ describe("resolveLatest", () => {
   });
 
   it("la igualdad de proveedor se comprueba independientemente de los matchers", () => {
-    // Matcher deliberadamente permisivo: solo la defensa de providerID debe
-    // impedir que un candidato de otro proveedor gane.
+    // Deliberately permissive matcher: only the providerID defense must
+    // prevent a candidate from another provider from winning.
     const permissive: NormalizedAlias = {
       key: "anthropic/x",
       provider: "anthropic",

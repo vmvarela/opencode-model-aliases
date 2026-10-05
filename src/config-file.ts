@@ -3,13 +3,13 @@ import path from "node:path";
 import { type ParseError, parse, printParseErrorCode } from "jsonc-parser";
 import { isPlainObject } from "./config.js";
 
-/** Directorio + nombre del archivo de configuración del plugin. */
+/** Directory + file name of the plugin configuration file. */
 const CONFIG_DIR = ".opencode";
 const FILE_NAME = "opencode-model-aliases.jsonc";
 
-/** Options crudas leídas del archivo; los valores aún no están validados.
- *  Las claves raíz no reconocidas se preservan tal cual: normalizeOptions
- *  debe rechazarlas como parse-error (sin whitelisting silencioso). */
+/** Raw options read from the file; values are not validated yet.
+ *  Unrecognized root keys are preserved as-is: normalizeOptions
+ *  must reject them as parse-error (no silent whitelisting). */
 export interface RawFileOptions {
   readonly aliases?: Record<string, unknown>;
   readonly strict?: unknown;
@@ -18,7 +18,7 @@ export interface RawFileOptions {
 }
 
 export interface LoadedConfigFile {
-  /** Ruta del primer archivo existente hallado (ya validado). */
+  /** Path of the first existing file found (already validated). */
   readonly path: string;
   readonly options: RawFileOptions;
 }
@@ -28,12 +28,12 @@ export type LoadConfigFileResult =
   | { ok: false; reason: string };
 
 /**
- * Busca el archivo de configuración más cercano subiendo desde
- * `startDirectory` hasta la raíz del filesystem. El primer
- * `<dir>/.opencode/opencode-model-aliases.jsonc` existente gana: no se
- * fusionan varios archivos ancestrales ni se consultan directorios globales.
- * ENOENT continúa hacia arriba; cualquier otro error de I/O (EISDIR, EACCES…)
- * falla con ruta y código, sin volcar contenido del archivo.
+ * Finds the nearest configuration file by walking up from
+ * `startDirectory` to the filesystem root. The first existing
+ * `<dir>/.opencode/opencode-model-aliases.jsonc` wins: multiple ancestor
+ * files are not merged and global directories are not consulted.
+ * ENOENT keeps walking up; any other I/O error (EISDIR, EACCES…) fails
+ * with path and code, without dumping file contents.
  */
 export async function loadConfigFile(startDirectory: string): Promise<LoadConfigFileResult> {
   let current = path.resolve(startDirectory);
@@ -56,8 +56,8 @@ export async function loadConfigFile(startDirectory: string): Promise<LoadConfig
       };
     }
 
-    // El parser es tolerante a fallos: sin inspeccionar `errors` aceptaría
-    // datos parciales como si fueran válidos.
+    // The parser is failure-tolerant: without inspecting `errors` it would
+    // accept partial data as if it were valid.
     const errors: ParseError[] = [];
     const data = parse(text, errors, { allowTrailingComma: true });
     if (errors.length > 0) {
@@ -81,11 +81,11 @@ export async function loadConfigFile(startDirectory: string): Promise<LoadConfig
       };
     }
 
-    // Se preservan todas las claves propias del archivo, incluidas las
-    // desconocidas: el whitelisting ocultaría erratas de raíz antes de
-    // validar. El spread copia como propiedad de datos propia, seguro ante
-    // claves "__proto__" hostiles. El contenedor de aliases ya fue validado
-    // arriba, de ahí el cast.
+    // All own keys of the file are preserved, including unknown ones:
+    // whitelisting would hide root typos before validation. The spread
+    // copies as an own data property, safe against hostile "__proto__"
+    // keys. The aliases container was already validated above, hence the
+    // cast.
     const options = { ...data } as RawFileOptions;
     return { ok: true, file: { path: candidate, options } };
   }
