@@ -220,6 +220,7 @@ Requires Node.js 22+ and pnpm 11.
 ```sh
 pnpm install
 pnpm run verify   # lint + typecheck + tests + build (self-contained)
+pnpm run check:release # offline release checks; run after verify before opening a PR
 pnpm run build    # emit dist/
 pnpm run test     # vitest
 pnpm run check    # biome
@@ -292,25 +293,39 @@ directly at a built checkout of this repo/product directory — the root
 
 [.github/workflows/release.yml](.github/workflows/release.yml) runs
 [semantic-release](https://semantic-release.gitbook.io/) (v25.0.9, dev
-dependency exactly) on every push to `master` and on manual
-`workflow_dispatch`, publishing the package to npm with [npm trusted
+dependency exactly) only on manual `workflow_dispatch` from `master`,
+publishing the package to npm with [npm trusted
 publishing](https://docs.npmjs.com/trusted-publishers) via OIDC on
 GitHub-hosted runners (no `NPM_TOKEN`, no persistent npm token) and creating a
 GitHub Release per version whose notes serve as the changelog (there is no
 changelog bot and no version-commit push to `master`).
 
+Merge PRs into `master` to accumulate changes without publishing. When ready,
+open **Actions → Release → Run workflow**, select **master**, and dispatch it.
+semantic-release analyzes all commits since the last release tag; if none
+warrant a release, it publishes nothing. Milestones do not determine versions.
+
 The release job only runs for the official repository
-`vmvarela/opencode-model-aliases`, on the `master` branch, and when the
-repository variable `NPM_RELEASE_ENABLED` is `true` — it is currently `true`
-and must remain so; removing it or setting it to `false` disables npm
-publishing. Releases are serialized on the same branch and never cancelled
-midway. Before releasing, the workflow runs the full verification suite
+`vmvarela/opencode-model-aliases`, on the `master` branch. The old repository
+variable `NPM_RELEASE_ENABLED` is no longer used and can be deleted. Releases
+are serialized on the same branch and never cancelled midway. Before releasing,
+the workflow runs the full verification suite
 (`pnpm run verify`) and the offline release-consistency check
 (`pnpm run check:release`), which validates `.releaserc.json`, the package
 metadata, the workflow gate, the bundled plugins' interfaces, the
 commit-analyzer and release-notes-generator behavior over fixed fixtures, and
 the tarball inventory of `npm pack --dry-run` — without network, registry, or
 semantic-release execution.
+
+The normal CI `verify` job runs both `pnpm run verify` and
+`pnpm run check:release` on PRs and pushes to `master`. On PRs it also validates
+the title as a Conventional Commit, including after title edits. This title
+check is part of the existing required `verify` check, so no additional
+ruleset check is needed. The repository uses squash merge with the PR title
+as the default commit title; preserve that title when merging. Accepted types
+are `feat`, `fix`, `perf`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`,
+`revert`, and `style`, with an optional scope and breaking-change `!`, for
+example `feat: add capability filters` or `fix(core)!: change the contract`.
 
 Release versions are derived from Conventional Commits (`fix:` and `perf:` →
 patch, `feat:` → minor, breaking commits → major) and tagged `v<version>`. A breaking
@@ -322,8 +337,7 @@ registry (`npm view opencode-model-aliases`) or the repo's GitHub Releases.
 The one-time bootstrap checklist — manual first publish with 2FA (required to
 bootstrap OIDC trusted publishing on a new package), npm trusted-publisher
 configuration, and the `v0.1.0` starting tag — is complete; subsequent
-eligible releases are handled by the active workflow on push to `master`
-(with `workflow_dispatch` still available as a manual trigger).
+eligible releases are published when the Release workflow is manually dispatched.
 
 Pure config normalization and resolution live in `src/normalize.ts` / `src/resolve.ts`; the
 JSONC config-file loader is `src/config-file.ts`; the OpenCode v2 adapter is `src/plugin.ts`;
