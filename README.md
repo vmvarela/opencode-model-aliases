@@ -1,13 +1,31 @@
 # opencode-model-aliases
 
+[![npm version](https://img.shields.io/npm/v/opencode-model-aliases.svg)](https://www.npmjs.com/package/opencode-model-aliases)
+[![CI](https://github.com/vmvarela/opencode-model-aliases/actions/workflows/ci.yml/badge.svg)](https://github.com/vmvarela/opencode-model-aliases/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 An [OpenCode](https://opencode.ai) v2 plugin that materializes **floating model aliases**
 into the model catalog. Configure an alias once — say `anthropic/smart` — and the plugin
 picks the newest matching source model at every catalog refresh, exposing it under a stable
 ID. Your configuration and prompts keep working as the provider ships new models; you never
 hard-code a model ID that goes stale.
 
-Current release: [`opencode-model-aliases@0.2.0`](https://www.npmjs.com/package/opencode-model-aliases)
-(npm `latest`); see [GitHub Releases](https://github.com/vmvarela/opencode-model-aliases/releases).
+## Why
+
+Model IDs age badly: Sonnet gets point releases, `*-preview` snapshots get promoted, and
+hard-coded references in OpenCode configs and agent definitions go stale. This plugin lets
+you define a floating alias once and resolve it on each catalog refresh:
+
+- **Future-proof config** — define "the newest matching Sonnet" or "the newest Copilot
+  model with tools and image input" once; it tracks newly released matching models at the
+  next catalog refresh.
+- **Constrained picks are first-class** — filterable by tools, modalities, and minimum
+  context, so an alias means "the newest model that *can* do this", not just "the newest".
+- **Predictable and observable** — deterministic selection rules (no declaration-order
+  surprises), provider-isolated matching, and `/model-aliases` shows exactly what each
+  alias resolved to.
+- **Fail-safe by default** — malformed patterns are rejected at startup; unresolved aliases
+  just warn and are omitted, leaving other aliases unaffected.
 
 ## Quick Start
 
@@ -50,6 +68,14 @@ Restart OpenCode. Type `/model-aliases` to see what each alias resolved to.
 ## How it works
 
 For each configured alias the plugin, at every catalog refresh:
+
+```
+match ──► filter ──► select ──► materialize
+  │           │          │
+  │ provider- │ status/  │ latest
+  │ isolated  │ caps/ctx │ wins
+  │ globs     │ ANDed    │
+```
 
 1. **Matches** candidates with include/exclude globs. Patterns are fully qualified
    (`"provider/glob"`) and provider-isolated: the pattern's provider must be a literal that
