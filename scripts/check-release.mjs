@@ -143,12 +143,12 @@ await step("config .releaserc.json y metadatos package.json", () => {
   );
 });
 
-// --- Workflow con compuerta deshabilitada -------------------------------------
+// --- Workflow de publicación manual ------------------------------------------
 await step("workflow release.yml: compuerta, permisos y credenciales", () => {
   assert.match(workflow, /github\.repository == 'vmvarela\/opencode-model-aliases'/);
   assert.match(workflow, /github\.ref == 'refs\/heads\/master'/);
-  // Sin la variable definida (UNSET) el job queda deshabilitado.
-  assert.match(workflow, /vars\.NPM_RELEASE_ENABLED == 'true'/);
+  assert.match(workflow, /^on:\s*\n {2}workflow_dispatch:\s*\n\npermissions:/m);
+  assert.ok(!workflow.includes("NPM_RELEASE_ENABLED"));
   assert.match(workflow, /contents: read/);
   assert.match(workflow, /contents: write/);
   assert.match(workflow, /id-token: write/);

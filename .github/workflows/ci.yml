@@ -4,6 +4,7 @@ on:
   push:
     branches: [master]
   pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
 
 permissions:
   contents: read
@@ -12,6 +13,22 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
+      # Keep title validation in the required verify check. Read event data rather
+      # than interpolating untrusted PR text into shell commands.
+      - name: Validate Conventional Commit PR title
+        if: github.event_name == 'pull_request'
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const { pull_request: { title } } = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+          const conventionalTitle = /^(feat|fix|perf|docs|refactor|test|build|ci|chore|revert|style)(\([^()\r\n]+\))?!?: \S[^\r\n]*$/u;
+          if (/[\r\n]/u.test(title) || !conventionalTitle.test(title)) {
+            console.error('PR title must use Conventional Commits, e.g. feat: add capability filters or fix(core)!: change the contract.');
+            process.exit(1);
+          }
+          console.log('PR title follows Conventional Commits.');
+          NODE
+
       - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7
@@ -26,3 +43,6 @@ jobs:
 
       - name: Verify (lint + typecheck + tests + build)
         run: pnpm run verify
+
+      - name: Offline release checks
+        run: pnpm run check:release
