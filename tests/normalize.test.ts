@@ -222,6 +222,151 @@ describe("normalizeOptions", () => {
     expect(r.ok).toBe(false);
   });
 
+  it("filter.capabilities normaliza requisitos exactos y listas all-of", () => {
+    const ok = normalize(
+      optionsWith({
+        "anthropic/a": {
+          match: "anthropic/**",
+          filter: { capabilities: { tools: true, input: ["text", "image"], output: ["text"] } },
+        },
+        "anthropic/b": { match: "anthropic/**", filter: { capabilities: { tools: false } } },
+      }),
+    );
+    expect(ok.ok).toBe(true);
+    if (ok.ok) {
+      expect(ok.config.aliases[0]?.capabilities).toEqual({
+        tools: true,
+        input: ["text", "image"],
+        output: ["text"],
+      });
+      expect(ok.config.aliases[0]?.minContext).toBeUndefined();
+      expect(ok.config.aliases[1]?.capabilities).toEqual({ tools: false });
+    }
+
+    // Only optional fields: an empty object declares no requirement and is a no-op.
+    const empty = normalize(
+      optionsWith({
+        "anthropic/a": { match: "anthropic/**", filter: { capabilities: {} } },
+        "anthropic/b": {
+          match: "anthropic/**",
+          filter: { capabilities: {}, minContext: 128_000 },
+        },
+      }),
+    );
+    expect(empty.ok).toBe(true);
+    if (empty.ok) {
+      expect(empty.config.aliases[0]?.capabilities).toBeUndefined();
+      expect(empty.config.aliases[0]?.minContext).toBeUndefined();
+      expect(empty.config.aliases[1]?.capabilities).toBeUndefined();
+      expect(empty.config.aliases[1]?.minContext).toBe(128_000);
+    }
+
+    // No filter at all: no capability requirements.
+    const none = normalize(optionsWith({ "anthropic/a": { match: "anthropic/**" } }));
+    expect(none.ok).toBe(true);
+    if (none.ok) expect(none.config.aliases[0]?.capabilities).toBeUndefined();
+  });
+
+  it("filter.capabilities rechaza valores malformados y claves desconocidas", () => {
+    const bad: unknown[] = [
+      "yes",
+      3,
+      null,
+      [],
+      { tools: "yes" },
+      { tools: 1 },
+      { tools: true, toolz: false }, // misspelled capability key
+      { tool: true, input: ["text"] }, // misspelled + valid mix
+      { input: [] },
+      { input: [""] },
+      { input: ["text", ""] },
+      { input: "text" },
+      { input: [42] },
+      { input: [null] },
+      { output: [] },
+      { output: [""] },
+      { output: "text" },
+      { tools: true, input: ["ok"], output: {} },
+    ];
+    for (const capabilities of bad) {
+      const r = normalize(
+        optionsWith({
+          "anthropic/a": { match: "anthropic/**", filter: { capabilities } },
+        }),
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.failure.kind).toBe("parse-error");
+        expect(r.failure.reason).toContain('alias "anthropic/a"');
+      }
+    }
+
+    // The misspelled capability key is named explicitly.
+    const typo = normalize(
+      optionsWith({
+        "anthropic/a": { match: "anthropic/**", filter: { capabilities: { toolz: true } } },
+      }),
+    );
+    expect(typo.ok).toBe(false);
+    if (!typo.ok) expect(typo.failure.reason).toContain("toolz");
+
+    // Unknown keys at the filter level are still rejected.
+    const filterTypo = normalize(
+      optionsWith({
+        "anthropic/a": {
+          match: "anthropic/**",
+          filter: { capabilites: { tools: true } }, // typo of "capabilities"
+        },
+      }),
+    );
+    expect(filterTypo.ok).toBe(false);
+    if (!filterTypo.ok) expect(filterTypo.failure.reason).toContain("capabilites");
+  });
+
+  it("filter.minContext exige un entero positivo y rechaza lo demas", () => {
+    const ok = normalize(
+      optionsWith({
+        "anthropic/a": { match: "anthropic/**", filter: { minContext: 200_000 } },
+      }),
+    );
+    expect(ok.ok).toBe(true);
+    if (ok.ok) {
+      expect(ok.config.aliases[0]?.minContext).toBe(200_000);
+      expect(ok.config.aliases[0]?.capabilities).toBeUndefined();
+    }
+
+    for (const minContext of [0, -1, -200_000, 1.5, "200000", true, null, Number.NaN, Infinity]) {
+      const r = normalize(
+        optionsWith({ "anthropic/a": { match: "anthropic/**", filter: { minContext } } }),
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.failure.kind).toBe("parse-error");
+    }
+  });
+
+  it("filter combina status, capabilities y minContext en un mismo alias", () => {
+    const ok = normalize(
+      optionsWith({
+        "anthropic/a": {
+          match: "anthropic/**",
+          filter: {
+            status: ["active", "alpha"],
+            capabilities: { tools: true, input: ["text"] },
+            minContext: 128_000,
+          },
+        },
+      }),
+    );
+    expect(ok.ok).toBe(true);
+    if (ok.ok) {
+      const alias = ok.config.aliases[0];
+      if (!alias) throw new Error("missing alias");
+      expect(alias.statuses).toEqual(["active", "alpha"]);
+      expect(alias.capabilities).toEqual({ tools: true, input: ["text"] });
+      expect(alias.minContext).toBe(128_000);
+    }
+  });
+
   it("select por alias: omitido equivale a latest; exige objeto con strategy exacto", () => {
     const ok = normalize(
       optionsWith({

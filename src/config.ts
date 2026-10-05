@@ -9,9 +9,27 @@ export function isPlainObject(value: unknown): value is Record<string, unknown> 
 /** Statuses accepted in filter.status; `deprecated` is always rejected. */
 export type AllowedStatus = Exclude<ModelStatus, "deprecated">;
 
+/**
+ * Requirement over Model.Info capabilities. Optional fields; every declared
+ * requirement must hold (all-of). Modality strings are open-ended: no fixed
+ * enum is enforced.
+ */
+export interface CapabilityRequirement {
+  /** Required candidate capability; exact boolean equality. */
+  readonly tools?: boolean;
+  /** Required input modalities; all must be present (all-of). */
+  readonly input?: readonly string[];
+  /** Required output modalities; all must be present (all-of). */
+  readonly output?: readonly string[];
+}
+
 export interface FilterOptions {
   /** Defaults to ["active"]; non-empty list of active/alpha/beta. */
   status?: AllowedStatus[];
+  /** Capability requirements; all declared fields must hold. */
+  capabilities?: CapabilityRequirement;
+  /** Minimum context window: limit.context must be >= this value. */
+  minContext?: number;
 }
 
 export interface SelectOptions {
@@ -48,6 +66,20 @@ export interface Candidate {
   readonly enabled: boolean;
   readonly status: ModelStatus;
   readonly time: { readonly released: number };
+  /**
+   * Optional for backwards compatibility: only consulted when the alias
+   * configures capability requirements; missing metadata then fails them.
+   */
+  readonly capabilities?: {
+    readonly tools?: boolean;
+    readonly input?: readonly string[];
+    readonly output?: readonly string[];
+  };
+  /**
+   * Optional for backwards compatibility: only consulted when the alias
+   * configures `minContext`; missing context metadata then fails it.
+   */
+  readonly limit?: { readonly context?: number };
 }
 
 export type Checker = (id: string) => boolean;
@@ -66,6 +98,10 @@ export interface NormalizedAlias {
   readonly excludes: readonly Checker[];
   /** Defaults to ["active"]. */
   readonly statuses: readonly AllowedStatus[];
+  /** Capability requirements; undefined when none were configured. */
+  readonly capabilities?: CapabilityRequirement;
+  /** Minimum context window; undefined when not configured. */
+  readonly minContext?: number;
   /** Configured name or, when omitted, the key itself. */
   readonly name: string;
   /** true only when the user configured `name` explicitly. */

@@ -909,6 +909,47 @@ describe("buildInspectRows structured public primitives", () => {
     expect(inspectRows[0]?.displayName).toBe("Bad\\u001b[31m");
   });
 
+  it("un fallo por requisitos capability/contexto llega a text y rows sin filtrar datos de candidatos", async () => {
+    const harness = createHarness({
+      directory: tempRoot,
+      sources: [
+        sourceModel({ id: "claude-a", providerID: "anthropic", name: "A", released: 1_000 }),
+      ],
+      options: {
+        aliases: {
+          "anthropic/pick": {
+            match: "anthropic/**",
+            filter: { capabilities: { tools: true }, minContext: 999_999 },
+          },
+        },
+      },
+    });
+    await floatingModels.setup(harness.ctx);
+    harness.replay();
+
+    const expected =
+      "no candidate satisfied all configured requirements " +
+      "(unmet across the candidate set: minContext>=999999)";
+    const warning = warnings.find((w) => w.includes('"anthropic/pick"')) ?? "";
+    expect(warning).toContain(expected);
+    // Solo se lista el requisito incumplido; tools se cumple y se omite.
+    expect(warning).not.toContain("capabilities.tools");
+    // No model/provider ids or private metadata in the diagnostic.
+    expect(warning).not.toContain("claude-a");
+
+    const handler = harness.rpc.handlers[0]?.inspect;
+    if (!handler) throw new Error("inspect handler missing");
+    const result = (await handler({}, {})) as {
+      text: string;
+      rows: Array<{ status: string; failureKind?: string; failureReason?: string }>;
+    };
+    expect(result.rows[0]?.status).toBe("unresolved");
+    expect(result.rows[0]?.failureKind).toBe("no-eligible");
+    expect(result.rows[0]?.failureReason).toBe(expected);
+    expect(result.text).toContain(expected);
+    expect(result.text).not.toContain("claude-a");
+  });
+
   it("el handler RPC expone tanto text como rows estructurados en el contrato público", async () => {
     const harness = createHarness({
       sources: DEFAULT_SOURCES(),

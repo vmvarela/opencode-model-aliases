@@ -287,7 +287,7 @@ describe("separate JSONC config file", () => {
       expect(result.file.options.strict).toBe(true);
       // Unknown root keys are preserved in the raw options:
       // normalizeOptions will reject them as parse-error.
-      expect(result.file.options["unknown"]).toBe(1);
+      expect(result.file.options.unknown).toBe(1);
       expect(
         result.file.path.endsWith(path.join(".opencode", "opencode-model-aliases.jsonc")),
       ).toBe(true);
