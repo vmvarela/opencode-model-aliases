@@ -1,11 +1,7 @@
 import { type Model, Plugin } from "@opencode/plugin";
-import {
-  isPlainObject,
-  type NormalizedAlias,
-  type NormalizedConfig,
-  type Options,
-} from "./config.js";
+import { isPlainObject, type NormalizedConfig, type Options } from "./config.js";
 import { loadConfigFile } from "./config-file.js";
+import { aliasDisplayName } from "./names.js";
 import { normalizeOptions } from "./normalize.js";
 import {
   type AliasReportRow,
@@ -20,14 +16,13 @@ import { ModelAliasesRpc } from "./rpc.js";
 
 const PLUGIN_ID = "opencode-model-aliases";
 const LOG_PREFIX = `[${PLUGIN_ID}]`;
-const ALIAS_SUFFIX = " (alias)";
 
 type ModelInfo = Model.Info;
 
 /**
- * Editor mínimo que el adaptador necesita del transform v2. La declaración
- * real del host envuelve los campos en DeepMutable y degrada los strings con
- * brand; el límite de registro convierte al editor del host a esta vista.
+ * Minimal editor the adapter needs from the v2 transform. The real host
+ * declaration wraps fields in DeepMutable and degrades strings with brand;
+ * the registration boundary converts the host editor to this view.
  */
 interface FloatingEditor {
   list(): readonly ModelInfo[];
@@ -35,39 +30,20 @@ interface FloatingEditor {
 }
 
 /**
- * Nombre visible por defecto, determinista a partir del modelID del alias
- * (último segmento, separadores como espacios, primera letra mayúscula):
- * "sonnet" → "Sonnet (alias)". El name configurado se usa intacto.
- */
-function defaultAliasName(modelID: string): string {
-  const segment = modelID.split("/").pop() ?? "";
-  const label = segment
-    .split(/[-_]+/)
-    .filter((word) => word.length > 0)
-    .map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1)}`)
-    .join(" ");
-  return `${label}${ALIAS_SUFFIX}`;
-}
-
-function displayName(alias: NormalizedAlias): string {
-  return alias.nameExplicit ? alias.name : defaultAliasName(alias.modelID);
-}
-
-/**
- * Una repetición del transform. Según la semántica v2, cada repetición parte
- * del catálogo fuente fresco (sin salida de repeticiones previas): snapshot
- * una vez, colisión verificada contra ese snapshot, resolución única por
- * alias y materialización. Ningún alias alimenta a otro.
+ * One transform replay. Per v2 semantics, each replay starts from the fresh
+ * source catalog (no output from previous replays): snapshot once, collision
+ * checked against that snapshot, single resolution per alias, and
+ * materialization. No alias feeds another.
  *
- * Devuelve las filas de informe construidas de los MISMOS resultados de
- * resolución usados para materializar; el llamador solo las publica si la
- * repetición completa (incluida la materialización) tuvo éxito.
+ * Returns report rows built from the SAME resolution results used to
+ * materialize; the caller only publishes them if the whole replay (including
+ * materialization) succeeded.
  */
 function replay(config: NormalizedConfig, editor: FloatingEditor): AliasReportRow[] {
   const snapshot = editor.list();
 
-  // Colisión de configuración: el id del alias ya existe como modelo fuente.
-  // Fatal siempre, independientemente de `strict` o de que el alias resuelva.
+  // Configuration collision: the alias id already exists as a source model.
+  // Always fatal, regardless of `strict` or whether the alias resolves.
   for (const alias of config.aliases) {
     const preexisting = snapshot.some(
       (model) => model.providerID === alias.provider && model.id === alias.modelID,
@@ -79,8 +55,8 @@ function replay(config: NormalizedConfig, editor: FloatingEditor): AliasReportRo
     }
   }
 
-  // Una sola resolución por alias; la misma decisión sirve para el preflight
-  // strict y para materializar.
+  // One resolution per alias; the same decision serves the strict preflight
+  // and materialization.
   const results = config.aliases.map((alias) => ({
     alias,
     result: resolveLatest(snapshot, alias),
@@ -100,17 +76,17 @@ function replay(config: NormalizedConfig, editor: FloatingEditor): AliasReportRo
 
   for (const { alias, result } of results) {
     if (!result.ok) {
-      // Tolerante: avisar y omitir solo este alias; los demás siguen.
+      // Tolerant: warn and skip only this alias; the rest continue.
       console.warn(
         `${LOG_PREFIX} alias "${sanitize(alias.key)}" unresolved (${sanitize(result.failure.kind)}): ${sanitize(result.failure.reason)}`,
       );
       continue;
     }
     const { model: winner, stages } = result;
-    const label = displayName(alias);
+    const label = aliasDisplayName(alias);
     editor.update(alias.provider, alias.modelID, (model) => {
       const clone = structuredClone(winner);
-      // Solo id y name cambian; el resto del Model.Info del ganador se hereda.
+      // Only id and name change; the rest of the winner Model.Info is inherited.
       const patchable = clone as { id: string; name: string };
       patchable.id = alias.modelID;
       patchable.name = label;
@@ -118,10 +94,10 @@ function replay(config: NormalizedConfig, editor: FloatingEditor): AliasReportRo
     });
     if (config.debug) {
       const [matching, filtering] = stages;
-      // El host v2.0.22 traga console.debug/console.log de los plugins, así que
-      // el diagnóstico de depuración usa console.warn con prefijo [debug]: los
-      // mensajes solo contienen metadatos públicos del modelo (id, recuentos,
-      // timestamp), nunca options/headers/credenciales ni prompts.
+      // The v2.0.22 host swallows console.debug/console.log from plugins, so
+      // debug diagnosis goes through console.warn with the [debug] prefix:
+      // messages only contain public model metadata (id, counts, timestamp),
+      // never options/headers/credentials or prompts.
       console.warn(
         `${LOG_PREFIX} [debug] alias "${sanitize(alias.key)}" -> ${sanitize(alias.provider)}/${sanitize(winner.modelID)}` +
           ` (strategy=latest, matched=${matching?.accepted ?? 0}, eligible=${filtering?.accepted ?? 0},` +
@@ -136,35 +112,35 @@ function replay(config: NormalizedConfig, editor: FloatingEditor): AliasReportRo
 export default Plugin.define({
   id: PLUGIN_ID,
   async setup(ctx) {
-    // Carga del archivo de configuración más cercano, ANTES de registrar
-    // cualquier transform: un fallo de lectura/parseo/fusión deja cero
-    // transforms registrados.
+    // Load the nearest configuration file BEFORE registering any
+    // transform: a read/parse/merge failure leaves zero transforms
+    // registered.
     const loaded = await loadConfigFile(ctx.location.directory);
     if (!loaded.ok) {
       throw new Error(`${LOG_PREFIX} invalid configuration: ${sanitize(loaded.reason)}`);
     }
     const fileOptions = loaded.file?.options;
 
-    // Entrada no confiable; se fusiona con el archivo como base y los valores
-    // inline del host con prioridad. La validación completa ocurre en
-    // normalizeOptions sobre el resultado fusionado.
+    // Untrusted input; merged with the file as base and the inline host
+    // values with priority. Full validation happens in normalizeOptions
+    // over the merged result.
     const inline = ctx.options as unknown;
     if (inline !== undefined && inline !== null && !isPlainObject(inline)) {
       throw new Error(`${LOG_PREFIX} invalid configuration: options must be an object`);
     }
     const inlineOptions = isPlainObject(inline) ? inline : {};
 
-    // Propiedades crudas de ambas fuentes se preservan, incluidas las raíces
-    // desconocidas: el whitelisting ocultaría erratas (p. ej. "strcit") antes
-    // de validar. El spread copia como propiedad de datos propia, seguro ante
-    // claves "__proto__" hostiles (nunca Object.assign sobre entrada no
-    // confiable). El orden inline>archivo se corrige abajo para strict/debug.
+    // Raw properties of both sources are preserved, including unknown
+    // roots: whitelisting would hide typos (e.g. "strcit") before
+    // validation. The spread copies as an own data property, safe against
+    // hostile "__proto__" keys (never Object.assign on untrusted input).
+    // The inline>file order is corrected below for strict/debug.
     const merged: Record<string, unknown> = {
       ...fileOptions,
       ...inlineOptions,
     };
     for (const key of ["strict", "debug"] as const) {
-      // El valor inline, si fue suministrado (incluso `false`), gana al archivo.
+      // The inline value, when supplied (even `false`), wins over the file.
       if (inlineOptions[key] !== undefined) {
         merged[key] = inlineOptions[key];
       } else if (fileOptions?.[key] !== undefined) {
@@ -172,10 +148,10 @@ export default Plugin.define({
       }
     }
 
-    // Union por clave: un registro inline reemplaza el AliasConfig completo
-    // del archivo para esa clave (sin fusión parcial). Los contenedores de
-    // cada fuente ya fueron validados; un contenedor inline inválido falla
-    // aquí en vez de extenderse silenciosamente en el mapa.
+    // Union by key: an inline entry replaces the whole file AliasConfig
+    // for that key (no partial merge). The containers of each source are
+    // already validated; an invalid inline container fails here instead of
+    // silently extending the map.
     const inlineAliases = inlineOptions.aliases;
     if (inlineAliases !== undefined && !isPlainObject(inlineAliases)) {
       throw new Error(
@@ -196,27 +172,26 @@ export default Plugin.define({
       );
     }
 
-    // El host v2 traga las excepciones de los transform (State.get captura,
-    // deshabilita el plugin y reconstruye el estado), de modo que la primera
-    // ctx.model.list() puede resolver con éxito tras un fallo. Capturamos el
-    // primer error solo durante la lectura inicial forzada y lo relanzamos:
-    // el rethrow mantiene el rollback del grupo y, si el host lo tragó,
-    // el setup falla explícitamente.
+    // The v2 host swallows transform exceptions (State.get catches, disables
+    // the plugin and rebuilds the state), so the first ctx.model.list() may
+    // resolve successfully after a failure. We capture the first error only
+    // during the forced initial read and rethrow it: the rethrow keeps the
+    // group rollback and, if the host swallowed it, setup fails explicitly.
     let initializing = true;
     let hasInitialError = false;
     let initialError: unknown;
 
-    // Snapshot de informe del setup (cierre pequeño, solo primitivas):
-    // null significa indisponibilidad — la última repetición falló y no hay
-    // mapeo actual descibible. Se reemplaza una vez por repetición, solo si
-    // toda la repetición/materialización tuvo éxito; ante cualquier fallo se
-    // limpia para no describir mapeos parciales ni stale como actuales.
+    // Report snapshot of the setup (small closure, primitives only):
+    // null means unavailability — the last replay failed and there is no
+    // describable current mapping. It is replaced once per replay, only if
+    // the whole replay/materialization succeeded; on any failure it is
+    // cleared so partial or stale mappings are never described as current.
     let reportRows: readonly AliasReportRow[] | null = null;
 
     const registration = await ctx.model.transform((hostEditor) => {
       try {
-        // Límite único host→adaptador: DeepMutable del host degrada los strings
-        // con brand; aquí se adapta a la vista limpia del editor.
+        // Single host→adapter boundary: the host DeepMutable degrades strings
+        // with brand; here it is adapted to the clean editor view.
         const rows = replay(normalized.config, hostEditor as unknown as FloatingEditor);
         reportRows = rows;
       } catch (error) {
@@ -243,20 +218,20 @@ export default Plugin.define({
     }
     initializing = false;
 
-    // Único RPC del plugin, registrado tras la inicialización exitosa. El
-    // handler NO vuelve a resolver ni consulta APIs de proveedor/sesión para
-    // inspeccionar: primero sincroniza el registro con ctx.model.list() (que
-    // además revela si un refresco falló) y después lee el snapshot publicado
-    // por el transform, verificando contra el catálogo final la identidad de
-    // cada alias resuelto (una política posterior puede retirar, deshabilitar
-    // o reescribir el modelID de ejecución del alias materializado).
+    // Single RPC of the plugin, registered after successful initialization.
+    // The handler does NOT re-resolve or query provider/session APIs to
+    // inspect: it first syncs the registry with ctx.model.list() (which also
+    // reveals whether a refresh failed) and then reads the snapshot published
+    // by the transform, verifying the identity of every resolved alias against
+    // the final catalog (a later policy may retire, disable or rewrite the
+    // execution modelID of the materialized alias).
     let rpcRegistration: { dispose: () => Promise<void> };
     try {
       rpcRegistration = await ctx.rpc.register(ModelAliasesRpc, {
         inspect: async () => {
-          // Vista mínima del catálogo final; solo primitivas de identidad
-          // (proveedor, id, modelID de ejecución y enabled). Sin objetos
-          // Model.Info completos, settings, headers ni credenciales.
+          // Minimal view of the final catalog; identity primitives only
+          // (provider, id, execution modelID and enabled). No full
+          // Model.Info objects, settings, headers or credentials.
           let catalog: ReadonlyArray<{
             providerID: string;
             id: string;
@@ -266,17 +241,17 @@ export default Plugin.define({
           try {
             catalog = (await ctx.model.list()).data;
           } catch {
-            // El refresco falló: ni el snapshot previo ni uno parcial; texto de
-            // indisponibilidad y rows vacío.
+            // The refresh failed: neither the previous snapshot nor a partial
+            // one; unavailability text and empty rows.
             return { text: UNAVAILABLE_REPORT, rows: [] };
           }
           const snapshot = reportRows;
           if (snapshot === null) {
             return { text: UNAVAILABLE_REPORT, rows: [] };
           }
-          // Visibilidad final por primitivas: un alias deshabilitado por una
-          // política posterior no se etiqueta como activo; un alias retirado
-          // conserva el comportamiento existente (inactive).
+          // Final visibility by primitives: an alias disabled by a later
+          // policy is not labeled active; a retired alias keeps the existing
+          // behavior (inactive).
           const wire = new Map<string, string | undefined>();
           const visible = new Set<string>();
           for (const model of catalog) {
@@ -284,11 +259,11 @@ export default Plugin.define({
             wire.set(entry, model.modelID);
             if (model.enabled !== false) visible.add(entry);
           }
-          // Guardia de identidad: si el alias sigue habilitado pero una
-          // política posterior cambió su modelID de ejecución respecto del
-          // seleccionado, el snapshot ya no describe el mapeo real. En vez de
-          // adivinar o mostrar el objetivo viejo como activo, informe
-          // indisponible completo (caso raro de política en conflicto).
+          // Identity guard: if the alias is still enabled but a later policy
+          // rewrote its execution modelID away from the selected one, the
+          // snapshot no longer describes the real mapping. Instead of guessing
+          // or showing the old target as active, the whole report becomes
+          // unavailable (rare conflicting-policy case).
           for (const row of snapshot) {
             if (row.status !== "resolved" || !visible.has(row.key)) continue;
             const selected = row.wireModelID ?? row.catalogID;
@@ -303,15 +278,15 @@ export default Plugin.define({
         },
       });
     } catch (error) {
-      // El modelo ya está registrado: si el RPC no pudo registrarse, el setup
-      // rechaza dejando cero recursos vivos.
+      // The model is already registered: if the RPC could not be registered,
+      // setup rejects leaving zero live resources.
       await registration.dispose();
       throw error;
     }
 
     return async () => {
-      // Limpieza en orden inverso al registro: primero el RPC, luego el
-      // transform. Ambos dispose son idempotentes.
+      // Cleanup in reverse registration order: first the RPC, then the
+      // transform. Both dispose calls are idempotent.
       await rpcRegistration.dispose();
       await registration.dispose();
     };

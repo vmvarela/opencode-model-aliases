@@ -1,21 +1,24 @@
 import type { Candidate, NormalizedAlias } from "./config.js";
 import type { FailureKind } from "./errors.js";
+import { aliasDisplayName } from "./names.js";
 import type { ResolveResult } from "./resolve.js";
 
-/** Estado de una fila: el alias resolvió o quedó sin resolver (tolerante). */
+/** Row status: the alias resolved or stayed unresolved (tolerant). */
 export type AliasReportStatus = "resolved" | "unresolved";
 
-/** Estado evaluado en el catálogo final: activo, inactivo (retirado/deshabilitado) o sin resolver. */
+/** Status evaluated against the final catalog: active, inactive (retired/disabled) or unresolved. */
 export type InspectRowStatus = "active" | "inactive" | "unresolved";
 
 /**
- * Fila estructurada de inspección: datos primitivos públicos con estado final.
- * Se consume en el TUI para mostrar la lista interactiva nativa (dialog.select)
- * y el detalle conciso por alias sin necesidad de parsear el informe en texto.
+ * Structured inspection row: public primitive data with the final status.
+ * Consumed by the TUI to render the native interactive list (dialog.select)
+ * and the concise per-alias detail without parsing the text report.
  */
 export interface InspectReportRow {
   readonly key: string;
   readonly provider: string;
+  /** Visible name: the configured name kept intact, or the default generated one. */
+  readonly displayName: string;
   readonly alias: string;
   readonly strategy: "latest";
   readonly status: InspectRowStatus;
@@ -28,59 +31,63 @@ export interface InspectReportRow {
 }
 
 /**
- * Fila de informe: SOLO datos primitivos públicos. Nunca Model.Info completo,
- * settings, headers, body, credenciales ni objetos de configuración.
+ * Report row: ONLY public primitive data. Never full Model.Info, settings,
+ * headers, body, credentials or configuration objects.
  */
 export interface AliasReportRow {
-  /** Referencia del alias `<provider>/<model>` (clave de configuración). */
+  /** Alias reference `<provider>/<model>` (configuration key). */
   readonly key: string;
-  /** Única estrategia implementada. */
+  /** Only implemented strategy. */
   readonly strategy: "latest";
   readonly status: AliasReportStatus;
-  /** Solo resolved: ganador real del catálogo. */
+  /** Visible name: the configured name kept intact, or the default generated one. */
+  readonly displayName: string;
+  /** Only resolved: the real winner from the catalog. */
   readonly providerID?: string;
   readonly catalogID?: string;
-  /** Solo resolved: modelID de ejecución (wire); se menciona por separado. */
+  /** Only resolved: the execution modelID (wire); reported separately. */
   readonly wireModelID?: string;
-  /** Solo unresolved. */
+  /** Only unresolved. */
   readonly failureKind?: FailureKind;
   readonly failureReason?: string;
 }
 
 /**
- * Mensaje estático de indisponibilidad: la última repetición falló, el
- * catálogo no pudo leerse o el mapeo publicado no pudo confirmarse contra el
- * catálogo final (una política posterior cambió la identidad del alias).
- * Nunca se sirve un snapshot previo/stale ni el error crudo.
+ * Static unavailability message: the last replay failed, the catalog could
+ * not be read, or the published mapping could not be confirmed against the
+ * final catalog (a later policy changed the identity of the alias). A
+ * previous/stale snapshot or the raw error is never served.
  */
 export const UNAVAILABLE_REPORT =
   "Model alias inspection is unavailable: the current alias mapping could not be confirmed against the final catalog.";
 
-/** Caracteres de control C0/C1 (incluye ESC/CSI y \x7F) — no seguros en TTY. */
+/** C0/C1 control characters (including ESC/CSI and \x7F) — not safe in a TTY. */
 const CONTROL = /\p{Cc}/gu;
 
-/** Sustituye caracteres de control por su escape `\uXXXX`; sin más cambios. */
+/** Replaces control characters with their `\uXXXX` escape; no other changes. */
 export function sanitize(value: string): string {
   return value.replace(CONTROL, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
 
 /**
- * Construye las filas del informe a partir de los MISMOS resultados de
- * resolución que usa el transform para materializar. Sin consultas extra.
+ * Builds report rows from the SAME resolution results the transform uses to
+ * materialize. No extra queries.
  */
 export function buildRows<T extends Candidate & { readonly modelID?: string }>(
   results: ReadonlyArray<{ alias: NormalizedAlias; result: ResolveResult<T> }>,
 ): AliasReportRow[] {
   return results.map(({ alias, result }) => {
+    const displayName = aliasDisplayName(alias);
     if (result.ok) {
       const wire = result.model.modelID;
       return {
         key: alias.key,
         strategy: "latest",
         status: "resolved",
+        displayName,
         providerID: result.model.providerID,
         catalogID: result.model.id,
-        // El modelID de ejecución solo interesa por separado si difiere.
+        // The execution modelID is only reported separately when it differs.
         ...(wire !== undefined && wire !== result.model.id ? { wireModelID: wire } : {}),
       } as AliasReportRow;
     }
@@ -88,6 +95,7 @@ export function buildRows<T extends Candidate & { readonly modelID?: string }>(
       key: alias.key,
       strategy: "latest",
       status: "unresolved",
+      displayName,
       failureKind: result.failure.kind,
       failureReason: result.failure.reason,
     } as AliasReportRow;
@@ -95,9 +103,9 @@ export function buildRows<T extends Candidate & { readonly modelID?: string }>(
 }
 
 /**
- * Convierte las filas de resolución en filas estructuradas de inspección evaluadas
- * contra la visibilidad del catálogo final. Datos primitivos públicos ordenados
- * determinísticamente por clave (orden de unidades de código).
+ * Converts resolution rows into structured inspection rows evaluated against
+ * the final catalog visibility. Public primitive data sorted deterministically
+ * by key (code unit order).
  */
 export function buildInspectRows(
   rows: ReadonlyArray<AliasReportRow>,
@@ -111,11 +119,13 @@ export function buildInspectRows(
     const key = sanitize(row.key);
     const safeProvider = sanitize(provider);
     const safeAlias = sanitize(alias);
+    const safeDisplayName = sanitize(row.displayName);
 
     if (row.status === "unresolved") {
       return {
         key,
         provider: safeProvider,
+        displayName: safeDisplayName,
         alias: safeAlias,
         strategy: "latest",
         status: "unresolved",
@@ -141,6 +151,7 @@ export function buildInspectRows(
     return {
       key,
       provider: safeProvider,
+      displayName: safeDisplayName,
       alias: safeAlias,
       strategy: "latest",
       status,
@@ -153,12 +164,13 @@ export function buildInspectRows(
 }
 
 /**
- * Formato determinista: informe agrupado por proveedor con resumen compacto.
- * Las filas se agrupan por el proveedor literal del alias y se ordenan por
- * clave (orden de unidades de código). En cada alias se muestra su nombre en
- * una línea y su objetivo indentado en la siguiente, sin prefijos redundantes
- * ni etiquetas activas repetitivas; las incidencias (inactivos o sin resolver)
- * y el modelID de ejecución (wire) cuando difiere se destacan explícitamente.
+ * Deterministic format: provider-grouped report with a compact summary.
+ * Rows are grouped by the literal provider of the alias key and sorted by
+ * key (code unit order). Each alias shows its visible name as the primary
+ * label, with the alias modelID in parentheses only when it differs, and its
+ * target indented on the next line, without redundant prefixes or repetitive
+ * labels; incidents (inactive or unresolved) and the execution wire modelID
+ * (when it differs) are highlighted explicitly.
  */
 export function formatReport(
   rows: ReadonlyArray<AliasReportRow>,
@@ -186,7 +198,7 @@ export function formatReport(
     summary = `${totalLabel} · ${statusParts.join(" · ")}`;
   }
 
-  // Agrupación por proveedor de la clave del alias.
+  // Grouping by the provider of the alias key.
   const groups = new Map<string, AliasReportRow[]>();
   for (const row of rows) {
     const slash = row.key.indexOf("/");
@@ -208,12 +220,17 @@ export function formatReport(
     const aliasBlocks = providerRows.map((row) => {
       const slash = row.key.indexOf("/");
       const aliasName = slash !== -1 ? row.key.slice(slash + 1) : row.key;
+      const safeDisplayName = sanitize(row.displayName);
       const safeAlias = sanitize(aliasName);
+      // Primary label = displayName; the alias modelID is only shown in
+      // parentheses when it differs from the visible name.
+      const aliasLabel =
+        row.displayName === aliasName ? safeDisplayName : `${safeDisplayName} (${safeAlias})`;
 
       if (row.status === "unresolved") {
         const kind = sanitize(row.failureKind ?? "unknown");
         const reason = row.failureReason ? `: ${sanitize(row.failureReason)}` : "";
-        return `  ${safeAlias}\n    → unresolved (${kind})${reason}`;
+        return `  ${aliasLabel}\n    → unresolved (${kind})${reason}`;
       }
 
       const target =
@@ -228,7 +245,7 @@ export function formatReport(
       if (!visible.has(row.key)) {
         targetLine += " (inactive: not in final catalog)";
       }
-      return `  ${safeAlias}\n${targetLine}`;
+      return `  ${aliasLabel}\n${targetLine}`;
     });
 
     return `${sanitize(provider)}\n${aliasBlocks.join("\n")}`;

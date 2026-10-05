@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Options } from "../src/index.js";
 import { normalizeOptions, splitSelector } from "../src/index.js";
 
-/** Construye Options con valores deliberadamente inválidos en los tests. */
+/** Builds Options with deliberately invalid values in the tests. */
 function optionsWith(
   aliases: Record<string, unknown>,
   extra: Partial<Options> = {},
@@ -215,7 +215,7 @@ describe("normalizeOptions", () => {
       expect(r.ok).toBe(false);
       if (!r.ok) expect(r.failure.kind).toBe("parse-error");
     }
-    // filter no-objeto
+    // non-object filter
     const r = normalize(
       optionsWith({ "anthropic/a": { match: "anthropic/**", filter: "active" } }),
     );
@@ -254,7 +254,7 @@ describe("normalizeOptions", () => {
       expect(r.failure.reason).toContain("strcit");
       expect(r.failure.reason).toContain("aliases, strict, debug");
     }
-    // Varias erratas: todas aparecen en el motivo.
+    // Several typos: all of them appear in the reason.
     const multi = normalize({
       aliases: { "anthropic/a": { match: "anthropic/**" } },
       strcit: true,

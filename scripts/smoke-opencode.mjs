@@ -66,9 +66,9 @@ const TARGET = "fake-large";
 const DUMMY_KEY = "smoke-dummy-key-not-a-credential";
 const CLI_TIMEOUT_MS = 120_000;
 const STEP_TIMEOUT_MS = 120_000;
-// Modo opt-in `--inspect`: en lugar de generar texto (sesión real), verifica
-// el informe de inspección vía el RPC real del host (opencode api) y exige
-// cero peticiones al proveedor.
+// Opt-in `--inspect` mode: instead of generating text (real session), verifies
+// the inspection report via the host's real RPC (opencode api) and requires
+// zero provider requests.
 const INSPECT = process.argv.includes("--inspect");
 
 function childEnv(dir) {
@@ -224,14 +224,14 @@ function startFakeServer(requests) {
 }
 
 async function main() {
-  // POSIX-only: fallar ANTES de crear recursos o procesos hijos.
+  // POSIX-only: fail BEFORE creating resources or child processes.
   if (process.platform === "win32") {
     throw new Error("POSIX-only smoke; run it on macOS/Linux.");
   }
 
-  // Temp único primero: HOME/XDG aislados existen ya para el probe de versión
-  // y para todo lo demás. Todo lo posterior a la adquisición del directorio va
-  // dentro de try/finally: cualquier fallo elimina exactamente este árbol.
+  // Unique temp dir first: isolated HOME/XDG exists already for the version
+  // probe and for everything else. Everything after the directory acquisition
+  // goes inside try/finally: any failure removes exactly this tree.
   const dir = await mkdtemp(path.join(os.tmpdir(), "opencode-model-aliases-smoke-"));
 
   let server = null;
@@ -262,7 +262,7 @@ async function main() {
     }
     console.log("smoke:opencode: OpenCode CLI v2 detected.");
 
-    // Build primero: dist rancio no puede hacer pasar el smoke falsamente.
+    // Build first: stale dist must not make the smoke pass falsely.
     const build = await runSpawn("pnpm", ["run", "build"], {
       cwd: REPO_ROOT,
       env,
@@ -308,8 +308,8 @@ async function main() {
       throw new Error("failed to link repo node_modules into the extracted package");
     }
 
-    // Comprobación de import del tarball local: el entrypoint raíz del paquete
-    // distribuido debe exportar el plugin y los re-exports públicos.
+    // Import check of the local tarball: the distributed package's root
+    // entrypoint must export the plugin and the public re-exports.
     const product = await import(pathToFileURL(path.join(pkgDir, "index.js")).href);
     if (typeof product.default?.setup !== "function") {
       throw new Error(
@@ -321,8 +321,8 @@ async function main() {
         "packed product root entrypoint is missing the public normalizeOptions re-export",
       );
     }
-    // El paquete distribuido debe exponer el TUI: wrapper raíz + build
-    // compilado con sus tipos (export "./tui" en package.json + files).
+    // The distributed package must expose the TUI: root wrapper + compiled
+    // build with its types ("./tui" export in package.json + files).
     for (const part of ["tui.js", path.join("dist", "tui.js"), path.join("dist", "tui.d.ts")]) {
       if (!existsSync(path.join(pkgDir, part))) {
         throw new Error(`packed product is missing "${part}" (required by the ./tui export)`);
@@ -335,10 +335,9 @@ async function main() {
     const endpoint = `http://127.0.0.1:${port}/v1`;
     console.log(`smoke:opencode: local model server listening at http://127.0.0.1:${port}`);
 
-    // Plugin consumidor: otro paquete temporal con main:index.js, cargado
-    // DESPUÉS del producto. Solo afirma el estado del catálogo del host y
-    // emite un sentinel con campos públicos; jamás imprime options/headers
-    // ni credenciales.
+    // Consumer plugin: another temp package with main:index.js, loaded AFTER
+    // the product. Only asserts the host catalog state and emits a sentinel
+    // with public fields; never prints options/headers or credentials.
     const consumerDir = path.join(dir, "consumer-pkg");
     await mkdir(consumerDir, { recursive: true });
     await writeFile(
@@ -372,18 +371,18 @@ async function main() {
 
     const project = path.join(dir, "proj");
     await mkdir(project, { recursive: true });
-    // Configuración del plugin SOLO en archivo JSONC separado (comentarios +
-    // trailing commas): la entrada nativa del plugin no lleva options y el
-    // archivo debe hallarse subiendo desde el cwd del proyecto.
+    // Plugin config ONLY in a separate JSONC file (comments + trailing
+    // commas): the native plugin entry carries no options and the file must
+    // be found by walking up from the project cwd.
     const pluginConfigDir = path.join(project, ".opencode");
     await mkdir(pluginConfigDir, { recursive: true });
     await writeFile(
       path.join(pluginConfigDir, "opencode-model-aliases.jsonc"),
       [
-        "// Configuración del plugin (JSONC): comentarios y trailing commas admitidos.",
+        "// Plugin configuration (JSONC): comments and trailing commas allowed.",
         "{",
         `  "aliases": {`,
-        `    // El alias materializa el ganador latest de los modelos fake-*.`,
+        `    // The alias materializes the latest winner of the fake-* models.`,
         `    "${ALIAS_KEY}": {`,
         `      "match": "${PROVIDER}/fake-*",`,
         `      "select": { "strategy": "latest" },`,
@@ -405,7 +404,7 @@ async function main() {
           autoupdate: false,
           model: ALIAS_KEY,
           plugins: [
-            // Sin options: toda la configuración viene del archivo JSONC.
+            // No options: all configuration comes from the JSONC file.
             { package: pkgDir },
             { package: consumerDir, options: {} },
           ],
@@ -441,9 +440,9 @@ async function main() {
     );
 
     if (INSPECT) {
-      // Modo inspect: cero generación y cero sesión. Se comprueba primero la
-      // forma REAL del comando `opencode api` en el CLI instalado (sin
-      // adivinarla): debe aceptar `method path...` y `--data`.
+      // Inspect mode: zero generation and zero session. First verify the REAL
+      // shape of the `opencode api` command in the installed CLI (without
+      // guessing it): it must accept `method path...` and `--data`.
       const help = await runSpawn("opencode", ["api", "--help"], {
         cwd: project,
         env,
@@ -457,8 +456,8 @@ async function main() {
       }
       console.log("smoke:opencode: `opencode api` CLI shape verified (method path... + --data).");
 
-      // Dispara el RPC del plugin por la superficie HTTP real del host:
-      // POST /api/rpc/<rpcID>/<method> con cuerpo {input:{}}.
+      // Fire the plugin RPC through the host's real HTTP surface:
+      // POST /api/rpc/<rpcID>/<method> with body {input:{}}.
       const api = await runSpawn(
         "opencode",
         [
@@ -483,7 +482,7 @@ async function main() {
       }
       if (api.spawnError) problems.push(`spawning opencode failed: ${api.spawnError}`);
 
-      // El cuerpo de éxito de la ruta RPC es {output: <salida del método>}.
+      // The RPC route success body is {output: <method output>}.
       let body = null;
       try {
         body = JSON.parse(api.stdout.trim());
@@ -499,10 +498,12 @@ async function main() {
           )}`,
         );
       } else {
-        // La sección del proveedor muestra el par alias→target; el alias
-        // corto se deriva de la clave de configuración.
+        // The provider section shows displayName→target pairs; the displayName
+        // is generated by src/names.ts from the alias key's last segment.
         const aliasName = ALIAS_KEY.split("/").pop();
-        if (!reportText.includes(`${PROVIDER}\n  ${aliasName}\n    → ${TARGET}`)) {
+        // Must match the displayName build logic: "latest" → "Latest (alias)".
+        const displayName = "Latest (alias)";
+        if (!reportText.includes(`${PROVIDER}\n  ${displayName} (${aliasName})\n    → ${TARGET}`)) {
           problems.push(`inspect report did not show the active alias target; got:\n${reportText}`);
         }
         if (!reportText.includes("1 alias · 1 active")) {
@@ -511,7 +512,7 @@ async function main() {
         if (!reportText.includes("strategy: latest")) {
           problems.push("inspect report did not mention the latest strategy");
         }
-        // El catálogo id === wire modelID en este entorno: sin mención wire.
+        // The catalog id === wire modelID in this environment: no wire mention.
         if (reportText.includes("wire model ID") || reportText.includes("wire modelID")) {
           problems.push(
             "inspect report mentioned a wire modelID although catalog id === wire modelID",
@@ -531,6 +532,13 @@ async function main() {
           if (matchedRow.alias !== aliasName) {
             problems.push(`expected row alias "${aliasName}", got "${matchedRow.alias}"`);
           }
+          // Required public primitive in the RPC schema: the report displayName
+          // must equal the generated catalog label.
+          if (matchedRow.displayName !== displayName) {
+            problems.push(
+              `expected row displayName "${displayName}", got "${matchedRow.displayName}"`,
+            );
+          }
           if (matchedRow.target !== TARGET && matchedRow.catalogID !== TARGET) {
             problems.push(
               `expected row target "${TARGET}", got "${matchedRow.target ?? matchedRow.catalogID}"`,
@@ -539,8 +547,8 @@ async function main() {
         }
       }
 
-      // El sink cuenta TODA petición al proveedor: cero tras la observación
-      // acotada (el subproceso terminó); inspeccionar no ejecuta sesiones.
+      // The sink counts EVERY provider request: zero after this bounded
+      // observation (the subprocess finished); inspecting runs no sessions.
       if (requests.length !== 0) {
         const seen = requests.map((r) => `${r.method} ${r.pathname}`).join(", ");
         problems.push(
@@ -595,7 +603,7 @@ async function main() {
       }
       if (run.spawnError) problems.push(`spawning opencode failed: ${run.spawnError}`);
 
-      // Evento de texto del asistente, exactamente "pong", desde stdout JSON.
+      // Assistant text event, exactly "pong", from stdout JSON.
       const events = run.stdout
         .split("\n")
         .map((line) => line.trim())
@@ -656,7 +664,7 @@ async function main() {
           .filter((line) => /opencode-model-aliases|smoke-catalog-consumer|debug/.test(line));
         console.error("--- plugin-relevant stderr lines ---");
         console.error(interesting.join("\n") || "(none)");
-        // Lanzar en vez de exit: el finally cierra el servidor y borra el temp.
+        // Throw instead of exit: the finally closes the server and removes the temp.
         throw new Error(`smoke:opencode: FAILED with ${problems.length} problem(s)`);
       }
 

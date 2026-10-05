@@ -16,8 +16,8 @@ import { createHarness, sourceModel } from "./harness.js";
 
 type ModelInfo = Model.Info;
 
-// Contador del resolvedor: el handler del RPC no debe invocar resolveLatest
-// por su cuenta; solo los replays del transform lo hacen.
+// Resolver call counter: the RPC handler must not call resolveLatest
+// on its own; only the transform replays do.
 const { resolverCalls } = vi.hoisted(() => ({ resolverCalls: [] as string[] }));
 vi.mock("../src/resolve.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/resolve.js")>();
@@ -49,6 +49,12 @@ const DEFAULT_SOURCES = () => [
 
 let tempRoot: string;
 let warnings: string[];
+
+/** Unresolved resolution result, compatible with ResolveResult<never>. */
+const unresolved = (reason: string) => ({
+  ok: false as const,
+  failure: { kind: "no-eligible" as const, reason },
+});
 
 beforeEach(() => {
   tempRoot = makeTempRoot();
@@ -84,6 +90,7 @@ describe("ModelAliasesRpc contract", () => {
             properties: {
               key: { type: "string" },
               provider: { type: "string" },
+              displayName: { type: "string" },
               alias: { type: "string" },
               strategy: { type: "string", enum: ["latest"] },
               status: { type: "string", enum: ["active", "inactive", "unresolved"] },
@@ -94,7 +101,7 @@ describe("ModelAliasesRpc contract", () => {
               failureKind: { type: "string" },
               failureReason: { type: "string" },
             },
-            required: ["key", "provider", "alias", "strategy", "status"],
+            required: ["key", "provider", "displayName", "alias", "strategy", "status"],
             additionalProperties: false,
           },
         },
@@ -131,8 +138,10 @@ describe("inspect report", () => {
     });
     harness.replay();
     const text = await harness.inspect();
-    expect(text).toContain("sonnet\n    → sonnet-4 (wire model ID: sonnet-4-exec)");
-    // El objetivo mostrado es el id real del catálogo, no el wire.
+    expect(text).toContain(
+      "Sonnet (alias) (sonnet)\n    → sonnet-4 (wire model ID: sonnet-4-exec)",
+    );
+    // The shown target is the real catalog id, not the wire.
     expect(text).not.toContain("→ sonnet-4-exec");
   });
 
@@ -140,7 +149,7 @@ describe("inspect report", () => {
     const { harness } = await setup({ aliases: { "anthropic/pick": { match: "anthropic/**" } } });
     harness.replay();
     const text = await harness.inspect();
-    expect(text).toContain("pick\n    → claude-b");
+    expect(text).toContain("Pick (alias) (pick)\n    → claude-b");
     expect(text).not.toContain("wire model ID");
   });
 
@@ -153,9 +162,9 @@ describe("inspect report", () => {
     });
     harness.replay();
     const text = await harness.inspect();
-    expect(text).toContain("good\n    → claude-b");
+    expect(text).toContain("Good (alias) (good)\n    → claude-b");
     expect(text).toContain(
-      "void\n    → unresolved (no-eligible): no candidate matched match/exclude patterns",
+      "Void (alias) (void)\n    → unresolved (no-eligible): no candidate matched match/exclude patterns",
     );
   });
 
@@ -175,7 +184,7 @@ describe("inspect report", () => {
     );
     harness.replay();
     const text = await harness.inspect();
-    expect(text).toContain("sonnet\n    → sonnet-5");
+    expect(text).toContain("Sonnet (alias) (sonnet)\n    → sonnet-5");
     expect(text).not.toContain("sonnet-4");
   });
 
@@ -188,7 +197,7 @@ describe("inspect report", () => {
     harness.removeSource("github-copilot", "sonnet-4");
     harness.replay();
     const text = await harness.inspect();
-    expect(text).toContain("sonnet\n    → unresolved");
+    expect(text).toContain("Sonnet (alias) (sonnet)\n    → unresolved");
     expect(text).not.toContain("1 active");
   });
 
@@ -197,12 +206,12 @@ describe("inspect report", () => {
       aliases: { "anthropic/pick": { match: "anthropic/**" } },
     });
     harness.replay();
-    // Otro plugin posterior elimina el alias del catálogo final.
+    // A later plugin removes the alias from the final catalog.
     await harness.ctx.model.transform((editor) => {
       (editor as unknown as { remove: (p: string, m: string) => void }).remove("anthropic", "pick");
     });
     const text = await harness.inspect();
-    expect(text).toContain("pick\n    → claude-b (inactive: not in final catalog)");
+    expect(text).toContain("Pick (alias) (pick)\n    → claude-b (inactive: not in final catalog)");
     expect(text).not.toContain("1 active");
   });
 
@@ -212,7 +221,7 @@ describe("inspect report", () => {
     });
     harness.replay();
     expect(await harness.inspect()).toContain("1 active");
-    // Otro plugin posterior deshabilita el alias materializado.
+    // A later plugin disables the materialized alias.
     await harness.ctx.model.transform((editor) => {
       (
         editor as unknown as {
@@ -223,7 +232,7 @@ describe("inspect report", () => {
       });
     });
     const text = await harness.inspect();
-    expect(text).toContain("pick\n    → claude-b (inactive: not in final catalog)");
+    expect(text).toContain("Pick (alias) (pick)\n    → claude-b (inactive: not in final catalog)");
     expect(text).not.toContain("1 active");
   });
 
@@ -232,8 +241,8 @@ describe("inspect report", () => {
       aliases: { "anthropic/pick": { match: "anthropic/**" } },
     });
     harness.replay();
-    expect(await harness.inspect()).toContain("pick\n    → claude-b");
-    // Otro plugin posterior reescribe el modelID de ejecución del alias.
+    expect(await harness.inspect()).toContain("Pick (alias) (pick)\n    → claude-b");
+    // A later plugin rewrites the alias's execution modelID.
     await harness.ctx.model.transform((editor) => {
       (
         editor as unknown as {
@@ -264,7 +273,9 @@ describe("inspect report", () => {
       });
     });
     const text = await harness.inspect();
-    expect(text).toContain("sonnet\n    → sonnet-4 (wire model ID: sonnet-4-exec)");
+    expect(text).toContain(
+      "Sonnet (alias) (sonnet)\n    → sonnet-4 (wire model ID: sonnet-4-exec)",
+    );
   });
 
   it("configuración vacía: informe sin aliases, sin modelo materializado", async () => {
@@ -280,13 +291,13 @@ describe("inspect report", () => {
     });
     harness.replay();
     const before = harness.counters.list;
-    // El refresco falla y el host traga el error: NUNCA se sirve el snapshot
-    // previo ni uno parcial.
+    // The refresh fails and the host swallows the error: NEVER serve the
+    // previous snapshot nor a partial one.
     harness.failEveryList(new Error("host refresh down"));
     expect(await harness.inspect()).toBe(UNAVAILABLE_REPORT);
     expect(harness.counters.list).toBeGreaterThan(before);
     harness.restoreList();
-    expect(await harness.inspect()).toContain("pick\n    → claude-b");
+    expect(await harness.inspect()).toContain("Pick (alias) (pick)\n    → claude-b");
   });
 
   it("una repetición fallida limpia el snapshot: nada parcial ni stale como actual", async () => {
@@ -294,17 +305,17 @@ describe("inspect report", () => {
       aliases: { "anthropic/pick": { match: "anthropic/**" } },
     });
     harness.replay();
-    // Colisión: el id del alias aparece como modelo fuente; la repetición
-    // falla (el transform se limpia y rethrow).
+    // Collision: the alias id appears as a source model; the replay
+    // fails (the transform cleans up and rethrows).
     harness.addSource(
       sourceModel({ id: "pick", providerID: "anthropic", name: "Fuente", released: 9 }),
     );
     expect(() => harness.replay()).toThrow(/configuration collision/);
-    // El host traga el fallo y resuelve la lista; el informe debe seguir
-    // indisponible, no describir el snapshot viejo.
+    // The host swallows the failure and resolves the list; the report must
+    // stay unavailable, not describe the old snapshot.
     const text = await harness.inspect();
     expect(text).toBe(UNAVAILABLE_REPORT);
-    // El registro fallido fue separado por el host.
+    // The failed registration was detached by the host.
     expect(harness.callbacks).toHaveLength(0);
   });
 
@@ -313,10 +324,10 @@ describe("inspect report", () => {
       aliases: { "anthropic/pick": { match: "anthropic/**" } },
     });
     harness.replay();
-    // Cada replay resuelve una vez por alias; setup (list inicial) y un
-    // replay explican las dos primeras. Dos inspecciones añaden solo los
-    // replays que el propio model.list() dispara, nunca llamadas extra del
-    // handler ni reload/provider/session/generate.
+    // Each replay resolves once per alias; setup (initial list) and one
+    // replay explain the first two. Two inspections add only the
+    // replays triggered by model.list() itself, never extra handler
+    // calls nor reload/provider/session/generate.
     expect(resolverCalls).toEqual(["anthropic/pick", "anthropic/pick"]);
     await harness.inspect();
     await harness.inspect();
@@ -341,10 +352,77 @@ describe("inspect report", () => {
     });
     harness.replay();
     const text = await harness.inspect();
-    const indexZz = text.indexOf("  zz\n");
-    const indexAa = text.indexOf("  aa\n");
+    const indexZz = text.indexOf("  Zz (alias) (zz)\n");
+    const indexAa = text.indexOf("  Aa (alias) (aa)\n");
     expect(indexAa).toBeGreaterThan(0);
     expect(indexAa).toBeLessThan(indexZz);
+  });
+
+  it("name explícito, nombre generado y modelID con barra concuerdan en texto y filas RPC", async () => {
+    const { harness } = await setup({
+      aliases: {
+        // Configured name: intact in the text and in the structured row.
+        "github-copilot/sonnet": { match: "github-copilot/**", name: "Sonnet (floating)" },
+        // No name: same generated name as catalog materialization.
+        "anthropic/pick": { match: "anthropic/**" },
+        // modelID with slash: the generated name comes from the last segment.
+        "openai/ft/legacy": { match: "openai/**" },
+      },
+    });
+    harness.replay();
+    const handler = harness.rpc.handlers[0]?.inspect;
+    if (!handler) throw new Error("inspect handler missing");
+    const result = (await handler({}, {})) as { text: string; rows: InspectReportRow[] };
+
+    // Text: explicit name intact; the unresolved openai alias keeps
+    // the generated name from the last segment of the slashed modelID.
+    expect(result.text).toContain("Sonnet (floating) (sonnet)\n    → sonnet-4");
+    expect(result.text).toContain("Pick (alias) (pick)\n    → claude-b");
+    expect(result.text).toContain("Legacy (alias) (ft/legacy)\n    → unresolved (no-eligible)");
+
+    // Structured rows: required and consistent displayName primitive.
+    const byRow = new Map(result.rows.map((row) => [row.key, row]));
+    expect(byRow.get("github-copilot/sonnet")?.displayName).toBe("Sonnet (floating)");
+    expect(byRow.get("anthropic/pick")?.displayName).toBe("Pick (alias)");
+    // Unresolved: the structured row keeps the visible name.
+    expect(byRow.get("openai/ft/legacy")?.status).toBe("unresolved");
+    expect(byRow.get("openai/ft/legacy")?.displayName).toBe("Legacy (alias)");
+    for (const row of result.rows) {
+      expect(typeof row.displayName).toBe("string");
+      // Text and RPC rows share the same displayName.
+      expect(result.text).toContain(row.displayName);
+    }
+  });
+
+  it("alias inactivo y sin resolver conservan el nombre visible en texto y filas", async () => {
+    const { harness } = await setup({
+      aliases: {
+        "anthropic/inactive": { match: "anthropic/**" },
+        "openai/missing": { match: "openai/**" },
+      },
+    });
+    harness.replay();
+    // A later plugin disables the materialized alias.
+    await harness.ctx.model.transform((editor) => {
+      (
+        editor as unknown as {
+          update: (p: string, m: string, fn: (model: ModelInfo) => void) => void;
+        }
+      ).update("anthropic", "inactive", (model) => {
+        (model as { enabled: boolean }).enabled = false;
+      });
+    });
+    const handler = harness.rpc.handlers[0]?.inspect;
+    if (!handler) throw new Error("inspect handler missing");
+    const result = (await handler({}, {})) as { text: string; rows: InspectReportRow[] };
+
+    expect(result.text).toContain("Inactive (alias) (inactive)\n    → claude-b (inactive:");
+    const byRow = new Map(result.rows.map((row) => [row.key, row]));
+    expect(byRow.get("anthropic/inactive")?.status).toBe("inactive");
+    expect(byRow.get("anthropic/inactive")?.displayName).toBe("Inactive (alias)");
+    expect(byRow.get("openai/missing")?.status).toBe("unresolved");
+    expect(byRow.get("openai/missing")?.displayName).toBe("Missing (alias)");
+    expect(result.text).toContain("Missing (alias) (missing)\n    → unresolved");
   });
 
   it("fallo del registro RPC: el modelo se desecha y el setup rechaza con cero recursos", async () => {
@@ -396,9 +474,30 @@ describe("report primitives", () => {
     if (!alias) throw new Error("alias should exist");
     const rows = buildRows([{ alias, result: { ok: true, model: rich, stages: [] } }]);
     expect(Object.keys(rows[0] ?? {}).sort()).toEqual(
-      ["catalogID", "key", "providerID", "status", "strategy"].sort(),
+      ["catalogID", "displayName", "key", "providerID", "status", "strategy"].sort(),
     );
+    expect(rows[0]?.displayName).toBe("Sonnet (alias)");
     expect(JSON.stringify(rows)).not.toMatch(/compaction|temperature|"x-hint"/);
+  });
+
+  it("buildRows conserva el nombre visible en filas sin resolver", () => {
+    const normalized = normalizeOptions({
+      aliases: {
+        "openai/void": { match: "openai/**" },
+        "github-copilot/named": { match: "github-copilot/**", name: "Sonnet (floating)" },
+      },
+    });
+    if (!normalized.ok) throw new Error("options should normalize");
+    const [voidAlias, namedAlias] = normalized.config.aliases;
+    if (!voidAlias || !namedAlias) throw new Error("aliases should exist");
+    const rows = buildRows([
+      { alias: voidAlias, result: unresolved("no candidate matched match/exclude patterns") },
+      { alias: namedAlias, result: unresolved("no candidate matched match/exclude patterns") },
+    ]);
+    // Generated name identical to catalog materialization.
+    expect(rows[0]?.displayName).toBe("Void (alias)");
+    // Explicit name kept intact in unresolved rows.
+    expect(rows[1]?.displayName).toBe("Sonnet (floating)");
   });
 
   it("sanitize escapa caracteres de control (ESC/CSI incluidos) en ids y reasons", () => {
@@ -419,6 +518,7 @@ describe("formatReport visual and structural layout", () => {
         key: "github-copilot/gemini-flash",
         strategy: "latest",
         status: "resolved",
+        displayName: "Gemini Flash (alias)",
         providerID: "github-copilot",
         catalogID: "gemini-2.5-flash",
       },
@@ -426,6 +526,7 @@ describe("formatReport visual and structural layout", () => {
         key: "github-copilot/sonnet",
         strategy: "latest",
         status: "resolved",
+        displayName: "Sonnet (alias)",
         providerID: "github-copilot",
         catalogID: "claude-3-5-sonnet-20241022",
       },
@@ -433,6 +534,7 @@ describe("formatReport visual and structural layout", () => {
         key: "openai/gpt-luna",
         strategy: "latest",
         status: "resolved",
+        displayName: "Gpt Luna (alias)",
         providerID: "openai",
         catalogID: "gpt-4o-mini-2024-07-18",
       },
@@ -440,6 +542,7 @@ describe("formatReport visual and structural layout", () => {
         key: "openai/gpt-sol",
         strategy: "latest",
         status: "resolved",
+        displayName: "Gpt Sol (alias)",
         providerID: "openai",
         catalogID: "o1-preview",
       },
@@ -447,6 +550,7 @@ describe("formatReport visual and structural layout", () => {
         key: "openai/gpt-terra",
         strategy: "latest",
         status: "resolved",
+        displayName: "Gpt Terra (alias)",
         providerID: "openai",
         catalogID: "gpt-4o-2024-11-20",
       },
@@ -454,6 +558,7 @@ describe("formatReport visual and structural layout", () => {
         key: "opencode-go/deepseek-flash",
         strategy: "latest",
         status: "resolved",
+        displayName: "Deepseek Flash (alias)",
         providerID: "opencode-go",
         catalogID: "deepseek-v3-flash",
       },
@@ -461,6 +566,7 @@ describe("formatReport visual and structural layout", () => {
         key: "opencode-go/glm-flash",
         strategy: "latest",
         status: "resolved",
+        displayName: "Glm Flash (alias)",
         providerID: "opencode-go",
         catalogID: "glm-4-flash",
       },
@@ -468,6 +574,7 @@ describe("formatReport visual and structural layout", () => {
         key: "opencode-go/qwen-flash",
         strategy: "latest",
         status: "resolved",
+        displayName: "Qwen Flash (alias)",
         providerID: "opencode-go",
         catalogID: "qwen-2.5-coder-32b-flash",
       },
@@ -476,30 +583,31 @@ describe("formatReport visual and structural layout", () => {
     const visibleKeys = new Set(actual8.map((r) => r.key));
     const output = formatReport(actual8, visibleKeys);
 
-    // Encabezado y resumen compacto.
+    // Compact header and summary.
     expect(output).toContain("Model aliases (strategy: latest)\n8 aliases · 8 active");
 
-    // Secciones agrupadas por proveedor.
+    // Provider-grouped sections; displayName as the primary label,
+    // with the alias modelID in parentheses when it differs.
     expect(output).toContain(
-      "github-copilot\n  gemini-flash\n    → gemini-2.5-flash\n  sonnet\n    → claude-3-5-sonnet-20241022",
+      "github-copilot\n  Gemini Flash (alias) (gemini-flash)\n    → gemini-2.5-flash\n  Sonnet (alias) (sonnet)\n    → claude-3-5-sonnet-20241022",
     );
     expect(output).toContain(
-      "openai\n  gpt-luna\n    → gpt-4o-mini-2024-07-18\n  gpt-sol\n    → o1-preview\n  gpt-terra\n    → gpt-4o-2024-11-20",
+      "openai\n  Gpt Luna (alias) (gpt-luna)\n    → gpt-4o-mini-2024-07-18\n  Gpt Sol (alias) (gpt-sol)\n    → o1-preview\n  Gpt Terra (alias) (gpt-terra)\n    → gpt-4o-2024-11-20",
     );
     expect(output).toContain(
-      "opencode-go\n  deepseek-flash\n    → deepseek-v3-flash\n  glm-flash\n    → glm-4-flash\n  qwen-flash\n    → qwen-2.5-coder-32b-flash",
+      "opencode-go\n  Deepseek Flash (alias) (deepseek-flash)\n    → deepseek-v3-flash\n  Glm Flash (alias) (glm-flash)\n    → glm-4-flash\n  Qwen Flash (alias) (qwen-flash)\n    → qwen-2.5-coder-32b-flash",
     );
 
-    // Sin repetición de prefijos de proveedor en las líneas de alias ni en los destinos.
+    // No repeated provider prefixes in alias lines or targets.
     expect(output).not.toContain("github-copilot/gemini-flash");
     expect(output).not.toContain("→ github-copilot/");
     expect(output).not.toContain("openai/gpt-terra");
     expect(output).not.toContain("→ openai/");
 
-    // Sin repetición de etiqueta (active) en cada línea resuelta.
+    // No repeated (active) label on each resolved line.
     expect(output).not.toContain("(active)");
 
-    // Ninguna línea supera 50 caracteres (garantía de no desbordamiento en alerta de 550px).
+    // No line exceeds 50 characters (overflow guarantee in a 550px alert).
     for (const line of output.split("\n")) {
       expect(line.length).toBeLessThanOrEqual(55);
     }
@@ -511,6 +619,7 @@ describe("formatReport visual and structural layout", () => {
         key: "anthropic/active-one",
         strategy: "latest",
         status: "resolved",
+        displayName: "Active One (alias)",
         providerID: "anthropic",
         catalogID: "claude-3-5-haiku",
       },
@@ -518,6 +627,7 @@ describe("formatReport visual and structural layout", () => {
         key: "anthropic/inactive-one",
         strategy: "latest",
         status: "resolved",
+        displayName: "Inactive One (alias)",
         providerID: "anthropic",
         catalogID: "claude-old",
       },
@@ -525,24 +635,28 @@ describe("formatReport visual and structural layout", () => {
         key: "openai/missing",
         strategy: "latest",
         status: "unresolved",
+        displayName: "Missing (alias)",
         failureKind: "no-eligible",
         failureReason: "no candidate matched pattern",
       },
     ];
 
-    // Solo active-one está en el catálogo final.
+    // Only active-one is in the final catalog.
     const visible = new Set(["anthropic/active-one"]);
     const output = formatReport(rows, visible);
 
-    // Resumen con desglose explícito de problemas.
+    // Summary with explicit problem breakdown.
     expect(output).toContain("3 aliases · 1 active · 1 inactive · 1 unresolved");
 
-    // Inactivo destacado con etiqueta específica.
-    expect(output).toContain("inactive-one\n    → claude-old (inactive: not in final catalog)");
-
-    // Sin resolver destacado con kind y reason.
+    // Inactive highlighted with a specific label.
+    expect(output).toContain("Active One (alias) (active-one)\n    → claude-3-5-haiku");
     expect(output).toContain(
-      "missing\n    → unresolved (no-eligible): no candidate matched pattern",
+      "Inactive One (alias) (inactive-one)\n    → claude-old (inactive: not in final catalog)",
+    );
+
+    // Unresolved highlighted with kind and reason.
+    expect(output).toContain(
+      "Missing (alias) (missing)\n    → unresolved (no-eligible): no candidate matched pattern",
     );
   });
 
@@ -552,13 +666,16 @@ describe("formatReport visual and structural layout", () => {
         key: "github-copilot/sonnet",
         strategy: "latest",
         status: "resolved",
+        displayName: "Sonnet (alias)",
         providerID: "github-copilot",
         catalogID: "sonnet-4",
         wireModelID: "sonnet-4-exec",
       },
     ];
     const output = formatReport(rows, new Set(["github-copilot/sonnet"]));
-    expect(output).toContain("sonnet\n    → sonnet-4 (wire model ID: sonnet-4-exec)");
+    expect(output).toContain(
+      "Sonnet (alias) (sonnet)\n    → sonnet-4 (wire model ID: sonnet-4-exec)",
+    );
   });
 
   it("maneja singular correctamente en el resumen", () => {
@@ -567,12 +684,73 @@ describe("formatReport visual and structural layout", () => {
         key: "anthropic/solo",
         strategy: "latest",
         status: "resolved",
+        displayName: "Solo (alias)",
         providerID: "anthropic",
         catalogID: "claude-3-5-sonnet",
       },
     ];
     const output = formatReport(rows, new Set(["anthropic/solo"]));
     expect(output).toContain("1 alias · 1 active");
+    expect(output).toContain("Solo (alias) (solo)\n    → claude-3-5-sonnet");
+  });
+
+  it("muestra el name configurado intacto y omite el paréntesis cuando coincide con el modelID del alias", () => {
+    const rows: AliasReportRow[] = [
+      {
+        key: "anthropic/float",
+        strategy: "latest",
+        status: "resolved",
+        displayName: "Sonnet (floating)",
+        providerID: "anthropic",
+        catalogID: "claude-b",
+      },
+      {
+        key: "anthropic/timeless",
+        strategy: "latest",
+        status: "resolved",
+        displayName: "timeless",
+        providerID: "anthropic",
+        catalogID: "claude-a",
+      },
+    ];
+    const visible = new Set(["anthropic/float", "anthropic/timeless"]);
+    const output = formatReport(rows, visible);
+    // Explicit name intact as the primary label, with the alias modelID.
+    expect(output).toContain("Sonnet (floating) (float)\n    → claude-b");
+    // No parentheses when displayName matches the alias modelID.
+    expect(output).toContain("timeless\n    → claude-a");
+    expect(output).not.toContain("timeless (timeless)");
+  });
+
+  it("soporta modelID con barra: el nombre generado proviene del último segmento", () => {
+    const rows: AliasReportRow[] = [
+      {
+        key: "anthropic/claude/sonnet",
+        strategy: "latest",
+        status: "resolved",
+        displayName: "Sonnet (alias)",
+        providerID: "anthropic",
+        catalogID: "claude-b",
+      },
+    ];
+    const output = formatReport(rows, new Set(["anthropic/claude/sonnet"]));
+    expect(output).toContain("Sonnet (alias) (claude/sonnet)\n    → claude-b");
+  });
+
+  it("escapa caracteres de control en el displayName y en el modelID del alias", () => {
+    const rows: AliasReportRow[] = [
+      {
+        key: "anthropic/bad\u001b[31m",
+        strategy: "latest",
+        status: "resolved",
+        displayName: "Bad\u001b[31m",
+        providerID: "anthropic",
+        catalogID: "claude-b",
+      },
+    ];
+    const output = formatReport(rows, new Set(["anthropic/bad\u001b[31m"]));
+    expect(output).toContain("Bad\\u001b[31m (bad\\u001b[31m)\n    → claude-b");
+    expect(output).not.toContain("\u001b");
   });
 });
 
@@ -583,6 +761,7 @@ describe("buildInspectRows structured public primitives", () => {
         key: "github-copilot/gemini-flash",
         strategy: "latest",
         status: "resolved",
+        displayName: "Gemini Flash (alias)",
         providerID: "github-copilot",
         catalogID: "gemini-2.5-flash",
       },
@@ -590,6 +769,7 @@ describe("buildInspectRows structured public primitives", () => {
         key: "github-copilot/sonnet",
         strategy: "latest",
         status: "resolved",
+        displayName: "Sonnet (alias)",
         providerID: "github-copilot",
         catalogID: "claude-3-5-sonnet-20241022",
         wireModelID: "sonnet-4-exec",
@@ -598,6 +778,7 @@ describe("buildInspectRows structured public primitives", () => {
         key: "openai/gpt-luna",
         strategy: "latest",
         status: "resolved",
+        displayName: "Gpt Luna (alias)",
         providerID: "openai",
         catalogID: "gpt-4o-mini-2024-07-18",
       },
@@ -605,6 +786,7 @@ describe("buildInspectRows structured public primitives", () => {
         key: "openai/gpt-sol",
         strategy: "latest",
         status: "resolved",
+        displayName: "Gpt Sol (alias)",
         providerID: "openai",
         catalogID: "o1-preview",
       },
@@ -612,6 +794,7 @@ describe("buildInspectRows structured public primitives", () => {
         key: "openai/gpt-terra",
         strategy: "latest",
         status: "resolved",
+        displayName: "Gpt Terra (alias)",
         providerID: "openai",
         catalogID: "gpt-4o-2024-11-20",
       },
@@ -619,6 +802,7 @@ describe("buildInspectRows structured public primitives", () => {
         key: "opencode-go/deepseek-flash",
         strategy: "latest",
         status: "resolved",
+        displayName: "Deepseek Flash (alias)",
         providerID: "opencode-go",
         catalogID: "deepseek-v3-flash",
       },
@@ -626,6 +810,7 @@ describe("buildInspectRows structured public primitives", () => {
         key: "opencode-go/glm-flash",
         strategy: "latest",
         status: "resolved",
+        displayName: "Glm Flash (alias)",
         providerID: "opencode-go",
         catalogID: "glm-4-flash",
       },
@@ -633,6 +818,7 @@ describe("buildInspectRows structured public primitives", () => {
         key: "opencode-go/qwen-flash",
         strategy: "latest",
         status: "resolved",
+        displayName: "Qwen Flash (alias)",
         providerID: "opencode-go",
         catalogID: "qwen-2.5-coder-32b-flash",
       },
@@ -643,11 +829,12 @@ describe("buildInspectRows structured public primitives", () => {
 
     expect(inspectRows).toHaveLength(8);
 
-    // Verificación de terra
+    // Terra row verification
     const terra = inspectRows.find((r) => r.key === "openai/gpt-terra");
     expect(terra).toEqual({
       key: "openai/gpt-terra",
       provider: "openai",
+      displayName: "Gpt Terra (alias)",
       alias: "gpt-terra",
       strategy: "latest",
       status: "active",
@@ -656,14 +843,16 @@ describe("buildInspectRows structured public primitives", () => {
       providerID: "openai",
     });
 
-    // Verificación de sonnet con wire model ID
+    // Sonnet row verification with wire model ID
     const sonnet = inspectRows.find((r) => r.key === "github-copilot/sonnet");
     expect(sonnet?.wireModelID).toBe("sonnet-4-exec");
+    expect(sonnet?.displayName).toBe("Sonnet (alias)");
 
-    // Ninguna fila contiene objetos no serializables ni credenciales
+    // No row contains non-serializable objects or credentials
     for (const r of inspectRows) {
       expect(typeof r.key).toBe("string");
       expect(typeof r.provider).toBe("string");
+      expect(typeof r.displayName).toBe("string");
       expect(typeof r.alias).toBe("string");
       expect(r.strategy).toBe("latest");
       expect(r.status).toBe("active");
@@ -676,13 +865,15 @@ describe("buildInspectRows structured public primitives", () => {
         key: "anthropic/pick",
         strategy: "latest",
         status: "resolved",
+        displayName: "Pick (alias)",
         providerID: "anthropic",
         catalogID: "claude-b",
       },
     ];
-    // visible no contiene anthropic/pick
+    // visible does not contain anthropic/pick
     const inspectRows = buildInspectRows(rows, new Set());
     expect(inspectRows[0]?.status).toBe("inactive");
+    expect(inspectRows[0]?.displayName).toBe("Pick (alias)");
   });
 
   it("conserva kind y reason en filas sin resolver", () => {
@@ -691,14 +882,31 @@ describe("buildInspectRows structured public primitives", () => {
         key: "openai/void",
         strategy: "latest",
         status: "unresolved",
+        displayName: "Void (alias)",
         failureKind: "no-eligible",
         failureReason: "no match found",
       },
     ];
     const inspectRows = buildInspectRows(rows, new Set());
     expect(inspectRows[0]?.status).toBe("unresolved");
+    expect(inspectRows[0]?.displayName).toBe("Void (alias)");
     expect(inspectRows[0]?.failureKind).toBe("no-eligible");
     expect(inspectRows[0]?.failureReason).toBe("no match found");
+  });
+
+  it("escapa caracteres de control en el displayName de la fila estructurada", () => {
+    const rows: AliasReportRow[] = [
+      {
+        key: "anthropic/bad",
+        strategy: "latest",
+        status: "resolved",
+        displayName: "Bad\u001b[31m",
+        providerID: "anthropic",
+        catalogID: "claude-b",
+      },
+    ];
+    const inspectRows = buildInspectRows(rows, new Set(["anthropic/bad"]));
+    expect(inspectRows[0]?.displayName).toBe("Bad\\u001b[31m");
   });
 
   it("el handler RPC expone tanto text como rows estructurados en el contrato público", async () => {
@@ -751,7 +959,7 @@ describe("buildInspectRows structured public primitives", () => {
     expect(emptyResult.text).toBe("No aliases configured.");
     expect(emptyResult.rows).toEqual([]);
 
-    // Simular fallo de refresco
+    // Simulate a refresh failure
     harness.failEveryList(new Error("network down"));
     const unavailResult = (await handler({}, {})) as {
       text: string;

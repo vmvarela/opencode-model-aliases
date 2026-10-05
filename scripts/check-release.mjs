@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Comprobaciones offline del flujo de release. No publica, no consulta
-// remotos, no ejecuta semanticRelease (tampoco en modo dry-run, que haría
-// fetch/push de prueba e intercambio OIDC). Solo lectura más `npm pack
-// --dry-run`, que no envía nada al registro.
+// Offline checks for the release pipeline. Never publishes, never queries
+// remotes, never runs semanticRelease (not even in dry-run mode, which would
+// do trial fetch/push and OIDC exchange). Read-only plus `npm pack --dry-run`,
+// which sends nothing to the registry.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -13,8 +13,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const readJson = (relative) => JSON.parse(readFileSync(path.join(ROOT, relative), "utf8"));
 
-// Versiones mínimas garantizadas por el dependency-bundling de
-// semantic-release 25.0.9 (sin declarar los plugins como deps directas).
+// Minimum versions guaranteed by the dependency bundling of
+// semantic-release 25.0.9 (without declaring the plugins as direct deps).
 const MIN_PLUGIN_VERSIONS = {
   "@semantic-release/commit-analyzer": [13, 0, 1],
   "@semantic-release/release-notes-generator": [14, 1, 0],
@@ -42,8 +42,8 @@ const packageDirFor = (resolved) => {
   return dir;
 };
 
-// Los plugins van instalados transitivamente por semantic-release: solo son
-// resolvibles desde su propio entry point, no desde la raíz del proyecto.
+// The plugins are installed transitively by semantic-release: they are only
+// resolvable from its own entry point, not from the project root.
 const pluginRequire = createRequire(
   createRequire(path.join(ROOT, "package.json")).resolve("semantic-release"),
 );
@@ -78,16 +78,16 @@ const releaseConfig = readJson(".releaserc.json");
 const packageManifest = readJson("package.json");
 const workflow = readFileSync(path.join(ROOT, ".github/workflows/release.yml"), "utf8");
 
-// El preset conventionalcommits solo parsea los footers listados en
-// noteKeywords; al sobreescribirlos hay que incluir el plural
-// ("BREAKING CHANGES") además del singular y "BREAKING-CHANGE".
+// The conventionalcommits preset only parses the footers listed in
+// noteKeywords; when overriding them, the plural form ("BREAKING CHANGES")
+// must be included in addition to the singular and "BREAKING-CHANGE".
 const BREAKING_NOTE_KEYWORDS = ["BREAKING CHANGE", "BREAKING CHANGES", "BREAKING-CHANGE"];
 const conventionalPresetConfig = {
   preset: "conventionalcommits",
   parserOpts: { noteKeywords: BREAKING_NOTE_KEYWORDS },
 };
 
-// --- Config de release y metadatos del paquete -------------------------------
+// --- Release config and package metadata -------------------------------------
 await step("config .releaserc.json y metadatos package.json", () => {
   assert.deepEqual(releaseConfig.branches, ["master"]);
   assert.ok(!("tagFormat" in releaseConfig) || releaseConfig.tagFormat === `v\${version}`);
@@ -110,8 +110,8 @@ await step("config .releaserc.json y metadatos package.json", () => {
       releasedLabels: false,
     },
   ]);
-  // Sin plugin de git ni changelog escrito en master: las notas de GitHub
-  // release sirven de changelog.
+  // No git plugin and no changelog written on master: the GitHub release
+  // notes serve as the changelog.
   for (const plugin of releaseConfig.plugins) {
     const [name] = Array.isArray(plugin) ? plugin : [plugin];
     assert.notEqual(name, "@semantic-release/git");
@@ -125,8 +125,8 @@ await step("config .releaserc.json y metadatos package.json", () => {
   });
   assert.deepEqual(packageManifest.publishConfig, { access: "public" });
   assert.deepEqual(packageManifest.devDependencies["semantic-release"], "25.0.9");
-  // Preset de Conventional Commits con pin exacto: 10.x es incompatible con el
-  // writer transitivo que empaqueta semantic-release 25.0.9.
+  // Conventional Commits preset with an exact pin: 10.x is incompatible with
+  // the transitive writer bundled by semantic-release 25.0.9.
   assert.deepEqual(
     packageManifest.devDependencies["conventional-changelog-conventionalcommits"],
     "9.3.1",
@@ -143,7 +143,7 @@ await step("config .releaserc.json y metadatos package.json", () => {
   );
 });
 
-// --- Workflow de publicación manual ------------------------------------------
+// --- Manual publishing workflow ----------------------------------------------
 await step("workflow release.yml: compuerta, permisos y credenciales", () => {
   assert.match(workflow, /github\.repository == 'vmvarela\/opencode-model-aliases'/);
   assert.match(workflow, /github\.ref == 'refs\/heads\/master'/);
@@ -164,14 +164,14 @@ await step("workflow release.yml: compuerta, permisos y credenciales", () => {
   assert.match(workflow, /pnpm run check:release/);
   assert.match(workflow, /pnpm exec semantic-release/);
   assert.ok(!/npm publish|pnpm publish/.test(workflow));
-  // Única referencia a secretos: el GITHUB_TOKEN que trae Actions.
+  // Only secrets reference: the GITHUB_TOKEN that Actions provides.
   assert.equal((workflow.match(/secrets\./g) ?? []).length, 1);
   assert.match(workflow, /GITHUB_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}/);
   assert.ok(!workflow.includes("NPM_TOKEN"));
   assert.ok(!workflow.includes("NODE_AUTH_TOKEN"));
 });
 
-// --- Plugins resueltos realmente instalados ----------------------------------
+// --- Actually installed resolved plugins -------------------------------------
 const plugins = Object.fromEntries(
   Object.keys(MIN_PLUGIN_VERSIONS).map((name) => [name, loadPlugin(name)]),
 );
@@ -225,7 +225,7 @@ await step("release-notes-generator generateNotes sobre fixtures con breaking", 
     options: { repositoryUrl: "https://github.com/vmvarela/opencode-model-aliases.git" },
   });
   const text = String(notes);
-  // El heading real es "### ⚠ BREAKING CHANGES": sin incluir el emoji.
+  // The actual heading is "### ⚠ BREAKING CHANGES": without including the emoji.
   const breakingIndex = text.indexOf("BREAKING CHANGES");
   const featuresIndex = text.indexOf("### Features");
   for (const expected of [
@@ -236,8 +236,8 @@ await step("release-notes-generator generateNotes sobre fixtures con breaking", 
   ]) {
     assert.ok(text.includes(expected), `notas sin ${JSON.stringify(expected)}`);
   }
-  // La sección de breaking va primero y recoge tanto el `!` del header como
-  // el footer en plural.
+  // The breaking section comes first and collects both the header `!` and the
+  // plural footer.
   assert.ok(
     breakingIndex !== -1 && breakingIndex < featuresIndex,
     "sección BREAKING CHANGES ausente o fuera de orden",
@@ -253,7 +253,7 @@ await step("release-notes-generator generateNotes sobre fixtures con breaking", 
   );
 });
 
-// Interfaces de publicación presentes pero nunca invocadas desde aquí.
+// Publishing interfaces present but never invoked from here.
 const npmPlugin = await plugins["@semantic-release/npm"].module;
 const githubPlugin = await plugins["@semantic-release/github"].module;
 assert.deepEqual(Object.keys(npmPlugin).sort(), [
@@ -266,7 +266,7 @@ assert.equal(typeof githubPlugin.publish, "function");
 assert.equal(typeof githubPlugin.success, "function");
 console.log("check:release: ok — interfaces npm/github presentes (sin invocarlas)");
 
-// --- Inventario del tarball: solo files de la whitelist ----------------------
+// --- Tarball inventory: only whitelisted files --------------------------------
 const packOutput = JSON.parse(
   execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
     cwd: ROOT,
@@ -274,11 +274,11 @@ const packOutput = JSON.parse(
     maxBuffer: 32 * 1024 * 1024,
   }),
 );
-// npm 11 emitte un array de paquetes (solo el paquete local).
+// npm 11 emits an array of packages (only the local package).
 assert.ok(Array.isArray(packOutput) && packOutput.length === 1, "pack inesperado");
 assert.equal(packOutput[0].name, "opencode-model-aliases");
 const packedFiles = packOutput[0].files.map((entry) => entry.path);
-// package.json va siempre en el tarball de npm además de la lista files.
+// package.json always goes into the npm tarball in addition to the files list.
 const allowedRoots = ["index.js", "tui.js", "dist", "README.md", "LICENSE", "package.json"];
 const leaked = packedFiles.filter((file) => {
   return !allowedRoots.some((root) => file === root || file.startsWith(`${root}/`));

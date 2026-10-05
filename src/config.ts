@@ -1,45 +1,46 @@
-/** Estatus reales de Model.Info. */
+/** Actual statuses of Model.Info. */
 export type ModelStatus = "alpha" | "beta" | "deprecated" | "active";
 
-/** Objeto plano (no null, no array); contenedor válido para options/aliases. */
+/** Plain object (not null, not array); valid container for options/aliases. */
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Estatus admitidos en filter.status; `deprecated` se rechaza siempre. */
+/** Statuses accepted in filter.status; `deprecated` is always rejected. */
 export type AllowedStatus = Exclude<ModelStatus, "deprecated">;
 
 export interface FilterOptions {
-  /** Por defecto ["active"]; lista no vacía de active/alpha/beta. */
+  /** Defaults to ["active"]; non-empty list of active/alpha/beta. */
   status?: AllowedStatus[];
 }
 
 export interface SelectOptions {
-  /** Obligatoria cuando se declara select; el objeto completo puede omitirse. */
+  /** Required when select is declared; the whole object may be omitted. */
   strategy: "latest";
 }
 
 export interface AliasConfig {
-  /** Globs include totalmente cualificados `provider/glob`. */
+  /** Fully qualified include globs `provider/glob`. */
   match: string | string[];
-  /** Globs exclude totalmente cualificados `provider/glob`. */
+  /** Fully qualified exclude globs `provider/glob`. */
   exclude?: string | string[];
   filter?: FilterOptions;
   select?: SelectOptions;
-  /** Nombre visible opcional; no vacío. */
+  /** Optional visible name; must be non-empty. */
   name?: string;
 }
 
 export interface Options {
-  /** Claves `<provider>/<model>`; el proveedor es la parte anterior al primer `/`. */
+  /** Keys `<provider>/<model>`; the provider is the part before the first `/`. */
   aliases: Record<string, AliasConfig>;
   strict?: boolean;
   debug?: boolean;
 }
 
 /**
- * Contrato mínimo del resolvedor; los campos son los usados por las etapas de
- * matching, filtering y selection. Model.Info de @opencode/plugin es conforme.
+ * Minimal contract of the resolver; the fields are the ones used by the
+ * matching, filtering and selection stages. Model.Info from @opencode/plugin
+ * is compliant.
  */
 export interface Candidate {
   readonly id: string;
@@ -51,28 +52,28 @@ export interface Candidate {
 
 export type Checker = (id: string) => boolean;
 
-/** Alias normalizado: matchers compilados + filtro + estrategia + nombre. */
+/** Normalized alias: compiled matchers + filter + strategy + name. */
 export interface NormalizedAlias {
-  /** Clave original `<provider>/<model>`. */
+  /** Original key `<provider>/<model>`. */
   readonly key: string;
-  /** Proveedor literal de la clave. */
+  /** Literal provider of the key. */
   readonly provider: string;
-  /** Parte modelo de la clave; puede contener `/`. */
+  /** Model part of the key; it may contain `/`. */
   readonly modelID: string;
   readonly match: readonly string[];
   readonly exclude: readonly string[];
   readonly includes: readonly Checker[];
   readonly excludes: readonly Checker[];
-  /** Por defecto ["active"]. */
+  /** Defaults to ["active"]. */
   readonly statuses: readonly AllowedStatus[];
-  /** name configurado o, si se omite, la propia clave. */
+  /** Configured name or, when omitted, the key itself. */
   readonly name: string;
-  /** true solo cuando el usuario configuró `name` explícitamente. */
+  /** true only when the user configured `name` explicitly. */
   readonly nameExplicit: boolean;
 }
 
 export interface NormalizedConfig {
-  /** Preserva el orden de inserción de las claves. */
+  /** Preserves the insertion order of the keys. */
   readonly aliases: readonly NormalizedAlias[];
   readonly strict: boolean;
   readonly debug: boolean;

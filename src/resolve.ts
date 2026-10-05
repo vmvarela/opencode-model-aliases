@@ -10,21 +10,21 @@ export type ResolveResult<T> =
   | { ok: true; model: T; stages: Stage[] }
   | { ok: false; failure: ResolveFailure };
 
-/** Identificador canónico `<providerID>/<id>` usado por matching y exclusiones. */
+/** Canonical identifier `<providerID>/<id>` used by matching and exclusions. */
 function canonical(candidate: Candidate): string {
   return `${candidate.providerID}/${candidate.id}`;
 }
 
-/** Fecha fiable: número finito mayor que 0 (milisegundos). */
+/** Reliable date: finite number greater than 0 (milliseconds). */
 function releasedMs(candidate: Candidate): number {
   const released = candidate.time.released;
   return typeof released === "number" && Number.isFinite(released) && released > 0 ? released : 0;
 }
 
 /**
- * Selección pura a partir de la lista fuente provista. Sin efectos
- * secundarios ni mutación de la entrada; el resolvedor nunca añade modelos
- * derivados de alias fuera de la lista explícita.
+ * Pure selection from the provided source list. No side effects and no
+ * mutation of the input; the resolver never adds models derived from aliases
+ * outside the explicit list.
  */
 export function resolveLatest<T extends Candidate>(
   models: readonly T[],
@@ -35,9 +35,9 @@ export function resolveLatest<T extends Candidate>(
   }
   const stages: Stage[] = [];
 
-  // Etapa 1: matching — includes y excludes sobre el id canónico.
+  // Stage 1: matching — includes and excludes against the canonical id.
   const matched = models.filter((candidate) => {
-    // Defensa en profundidad: la igualdad de proveedor no depende de los matchers.
+    // Defense in depth: provider equality does not depend on the matchers.
     if (candidate.providerID !== alias.provider) return false;
     const id = canonical(candidate);
     if (!alias.includes.some((check) => check(id))) return false;
@@ -54,7 +54,7 @@ export function resolveLatest<T extends Candidate>(
     };
   }
 
-  // Etapa 2: filtering — enabled + estatus admitidos por el alias.
+  // Stage 2: filtering — enabled + statuses accepted by the alias.
   const eligible = matched.filter(
     (candidate) => candidate.enabled !== false && alias.statuses.includes(candidate.status),
   );
@@ -66,7 +66,7 @@ export function resolveLatest<T extends Candidate>(
     };
   }
 
-  // Etapa 3: selection — latest; fechas desconocidas nunca ganan.
+  // Stage 3: selection — latest; unknown dates never win.
   const known = eligible.filter((candidate) => releasedMs(candidate) > 0);
   if (known.length === 0) {
     return {
@@ -81,7 +81,7 @@ export function resolveLatest<T extends Candidate>(
     const delta = releasedMs(b) - releasedMs(a);
     if (delta !== 0) return delta;
     if (a.id === b.id) return 0;
-    // Descendente, orden por unidades de código, independiente del locale.
+    // Descending, code unit order, locale-independent.
     return a.id < b.id ? 1 : -1;
   });
   const winner = sorted[0];

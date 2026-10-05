@@ -4,8 +4,8 @@ import { makeTempRoot, removeTempRoot, writeConfigFile } from "./config-fs.js";
 import { createHarness as baseHarness, type ModelInfo, sourceModel } from "./harness.js";
 
 /**
- * Envoltorio local: el directorio por defecto del harness es el raíz temporal
- * del test (nunca el repo real).
+ * Local wrapper: the harness default directory is the test temporary
+ * root (never the real repo).
  */
 function createHarness(input: Parameters<typeof baseHarness>[0] = {}) {
   return baseHarness({ ...input, directory: input.directory ?? tempRoot });
@@ -107,6 +107,54 @@ describe("opencode-model-aliases plugin", () => {
     expect(harness.view().get("github-copilot/sonnet")?.name).toBe("github-copilot/sonnet");
   });
 
+  it("el name del catálogo y el displayName del informe coinciden para name explícito y generado", async () => {
+    const harness = createHarness({
+      sources: DEFAULT_SOURCES(),
+      options: {
+        aliases: {
+          "github-copilot/sonnet": { match: "github-copilot/**", name: "Sonnet (floating)" },
+          "anthropic/pick": { match: "anthropic/**" },
+        },
+      },
+    });
+    await floatingModels.setup(harness.ctx);
+    harness.replay();
+    const explicit = harness.view().get("github-copilot/sonnet");
+    const generated = harness.view().get("anthropic/pick");
+    expect(explicit?.name).toBe("Sonnet (floating)"); // intact name in Model.Info
+    expect(generated?.name).toBe("Pick (alias)"); // same rule as the report
+
+    const handler = harness.rpc.handlers[0]?.inspect;
+    if (!handler) throw new Error("inspect handler missing");
+    const result = (await handler({}, {})) as {
+      rows: Array<{ key: string; displayName: string }>;
+    };
+    const byKey = new Map(result.rows.map((row) => [row.key, row.displayName]));
+    expect(byKey.get("github-copilot/sonnet")).toBe("Sonnet (floating)");
+    expect(byKey.get("anthropic/pick")).toBe("Pick (alias)");
+  });
+
+  it("modelID con barra: catálogo e informe generan el mismo nombre y mantienen el modelID de ejecución", async () => {
+    const harness = createHarness({
+      sources: DEFAULT_SOURCES(),
+      options: { aliases: { "anthropic/claude/float": { match: "anthropic/**" } } },
+    });
+    await floatingModels.setup(harness.ctx);
+    harness.replay();
+    const alias = harness.view().get("anthropic/claude/float");
+    expect(alias?.name).toBe("Float (alias)"); // last segment of "claude/float"
+
+    const handler = harness.rpc.handlers[0]?.inspect;
+    if (!handler) throw new Error("inspect handler missing");
+    const result = (await handler({}, {})) as {
+      text: string;
+      rows: Array<{ key: string; displayName: string }>;
+    };
+    expect(result.rows[0]?.key).toBe("anthropic/claude/float");
+    expect(result.rows[0]?.displayName).toBe("Float (alias)");
+    expect(result.text).toContain("Float (alias) (claude/float)\n    → claude-b");
+  });
+
   it("hereda package, canonical, settings, headers, body, capabilities, variants, cost y limit", async () => {
     const rich = sourceModel({
       id: "sonnet-4",
@@ -186,7 +234,7 @@ describe("opencode-model-aliases plugin", () => {
     );
     harness.replay();
     expect(harness.view().get("github-copilot/sonnet")?.modelID).toBe("sonnet-5");
-    // La identidad visible no depende del name del ganador.
+    // The visible identity does not depend on the winner's name.
     expect(harness.view().get("github-copilot/sonnet")?.name).toBe("Sonnet (alias)");
   });
 
@@ -201,7 +249,7 @@ describe("opencode-model-aliases plugin", () => {
 
     harness.removeSource("anthropic", "solo");
     harness.replay();
-    // El estado derivado se reconstruye desde la fuente: sin alias residual.
+    // The derived state is rebuilt from the source: no residual alias.
     expect(harness.view().get("anthropic/float")).toBeUndefined();
     const warning = warnings.find((w) => w.includes('"anthropic/float"')) ?? "";
     expect(warning).toContain("unresolved");
@@ -220,7 +268,7 @@ describe("opencode-model-aliases plugin", () => {
       sourceModel({ id: "float", providerID: "anthropic", name: "Ahora soy fuente", released: 9 }),
     );
     expect(() => harness.replay()).toThrow(/configuration collision/);
-    // El modelo fuente no fue suprimido ni suplantado.
+    // The source model was not suppressed nor replaced.
     const untouched = harness.view().get("anthropic/float");
     expect(untouched?.name).toBe("Ahora soy fuente");
     expect(untouched?.time.released).toBe(9);
@@ -240,9 +288,9 @@ describe("opencode-model-aliases plugin", () => {
     await expect(floatingModels.setup(harness.ctx)).rejects.toThrow(
       /strict: unresolved aliases.*anthropic\/void \(no-eligible\)/s,
     );
-    // El transform fue separado pese a que el list() del host resolvió.
+    // The transform was detached even though the host's list() resolved.
     expect(harness.callbacks).toHaveLength(0);
-    // El catálogo fuente permanece intacto.
+    // The source catalog remains intact.
     expect(harness.view().get("anthropic/claude-b")?.name).toBe("Claude B");
     expect(harness.view().get("github-copilot/sonnet-4")?.name).toBe("Sonnet");
     expect(harness.view().get("github-copilot/ok")).toBeUndefined();
@@ -276,8 +324,8 @@ describe("opencode-model-aliases plugin", () => {
     await floatingModels.setup(harness.ctx);
     expect(harness.view().get("github-copilot/sonnet")?.modelID).toBe("sonnet-4-exec");
 
-    // Un refresco del proveedor introduce un modelo fuente con el id del alias:
-    // el transform falla, el host lo deshabilita y la lista resuelve igualmente.
+    // A provider refresh introduces a source model with the alias's id:
+    // the transform fails, the host disables it, and the list still resolves.
     harness.addSource(
       sourceModel({
         id: "sonnet",
@@ -299,7 +347,7 @@ describe("opencode-model-aliases plugin", () => {
     if (typeof cleanup !== "function") throw new Error("setup did not return a cleanup");
     await cleanup();
     expect(harness.callbacks).toHaveLength(0);
-    await cleanup(); // idempotente
+    await cleanup(); // idempotent
     expect(harness.callbacks).toHaveLength(0);
   });
 
@@ -333,7 +381,7 @@ describe("opencode-model-aliases plugin", () => {
       const harness = createHarness({ sources: sources(), options: options(order) });
       await floatingModels.setup(harness.ctx);
       harness.replay();
-      harness.replay(); // segunda repetición: estado fresco desde la fuente
+      harness.replay(); // second replay: fresh state from the source
       expect(harness.view().get("anthropic/alias-a")?.modelID).toBe("claude-b");
       expect(harness.view().get("anthropic/alias-b")?.modelID).toBe("claude-b");
     }
@@ -354,7 +402,7 @@ describe("opencode-model-aliases plugin", () => {
     expect(harness.view().get("anthropic/good")?.modelID).toBe("claude-b");
     expect(harness.view().get("openai/void")).toBeUndefined();
     expect(warnings.some((w) => w.includes('"openai/void"'))).toBe(true);
-    // El alias resuelto no genera warning.
+    // The resolved alias does not produce a warning.
     expect(warnings.some((w) => w.includes('"anthropic/good"'))).toBe(false);
   });
 
@@ -371,10 +419,10 @@ describe("opencode-model-aliases plugin", () => {
     });
     await floatingModels.setup(loud.ctx);
     loud.replay();
-    // El host v2.0.22 traga console.debug; el diagnóstico [debug] va por
-    // console.warn, y console.debug debe seguir sin uso.
+    // Host v2.0.22 swallows console.debug; the [debug] diagnostics go
+    // through console.warn, and console.debug must remain unused.
     expect(debugs).toEqual([]);
-    expect(warnings).toHaveLength(2); // repetición del setup + repetición explícita
+    expect(warnings).toHaveLength(2); // setup replay + explicit replay
     for (const message of warnings) {
       expect(message).toContain("[opencode-model-aliases] [debug]");
       expect(message).toContain('alias "github-copilot/sonnet"');
@@ -383,7 +431,7 @@ describe("opencode-model-aliases plugin", () => {
       expect(message).toContain("matched=1");
       expect(message).toContain("eligible=1");
       expect(message).toContain("released=3000");
-      // Solo metadatos públicos del modelo; sin credenciales ni prompts.
+      // Only public model metadata; no credentials or prompts.
       expect(message).not.toMatch(/token|key|secret|password/i);
     }
   });
@@ -395,7 +443,7 @@ describe("opencode-model-aliases plugin: escape de caracteres de control", () =>
   const BEL = "\u0007";
   const DEL = "\u007F";
 
-  /** Sin caracteres de control C0/C1/DEL y con el escape visible. */
+  /** No C0/C1/DEL control characters and with the escaping visible. */
   function expectEscaped(message: string): void {
     expect(CONTROL.test(message)).toBe(false);
     expect(message).toContain("\\u001b");
@@ -411,7 +459,7 @@ describe("opencode-model-aliases plugin: escape de caracteres de control", () =>
     await floatingModels.setup(harness.ctx);
     harness.replay();
     const hostile = warnings.filter((w) => w.includes("unresolved"));
-    expect(hostile).toHaveLength(2); // repetición del setup + repetición explícita
+    expect(hostile).toHaveLength(2); // setup replay + explicit replay
     for (const message of hostile) {
       expectEscaped(message);
       expect(message).toContain('alias "anthropic/esc');

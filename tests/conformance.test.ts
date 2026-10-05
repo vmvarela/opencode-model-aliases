@@ -3,8 +3,8 @@ import { describe, expectTypeOf, it } from "vitest";
 import type { Candidate } from "../src/index.js";
 
 /**
- * Aserción en tiempo de compilación: el Model.Info real de @opencode/plugin
- * satisface el contrato mínimo del resolvedor, sin casts ni `any`.
+ * Compile-time assertion: the real Model.Info from @opencode/plugin
+ * satisfies the resolver's minimal contract, without casts or `any`.
  */
 describe("v2 conformance", () => {
   it("Model.Info cumple el contrato Candidate", () => {

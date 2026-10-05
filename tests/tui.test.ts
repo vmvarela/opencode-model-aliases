@@ -1,7 +1,11 @@
 import type { Plugin } from "@opencode/plugin/tui";
 import { describe, expect, it, vi } from "vitest";
 import { ModelAliasesRpc } from "../src/rpc.js";
-import plugin, { type InspectResponseRow } from "../src/tui.js";
+import plugin, {
+  formatDetailMessage,
+  type InspectResponseRow,
+  isInspectResponse,
+} from "../src/tui.js";
 
 interface KeymapCommand {
   id?: string;
@@ -60,6 +64,7 @@ interface StrictContextOptions {
 
 const SAMPLE_ROW_ACTIVE: InspectResponseRow = {
   key: "github-copilot/sonnet",
+  displayName: "Sonnet (alias)",
   provider: "github-copilot",
   alias: "sonnet",
   strategy: "latest",
@@ -72,6 +77,7 @@ const SAMPLE_ROW_ACTIVE: InspectResponseRow = {
 const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
   {
     key: "github-copilot/gemini-flash",
+    displayName: "Gemini Flash (alias)",
     provider: "github-copilot",
     alias: "gemini-flash",
     strategy: "latest",
@@ -81,6 +87,7 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
   },
   {
     key: "github-copilot/sonnet",
+    displayName: "Sonnet (alias)",
     provider: "github-copilot",
     alias: "sonnet",
     strategy: "latest",
@@ -91,6 +98,7 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
   },
   {
     key: "openai/gpt-luna",
+    displayName: "Custom GPT Luna",
     provider: "openai",
     alias: "gpt-luna",
     strategy: "latest",
@@ -100,6 +108,7 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
   },
   {
     key: "openai/gpt-sol",
+    displayName: "gpt-sol",
     provider: "openai",
     alias: "gpt-sol",
     strategy: "latest",
@@ -109,6 +118,7 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
   },
   {
     key: "openai/gpt-terra",
+    displayName: "GPT Terra (alias)",
     provider: "openai",
     alias: "gpt-terra",
     strategy: "latest",
@@ -118,6 +128,7 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
   },
   {
     key: "opencode-go/deepseek-flash",
+    displayName: "DeepSeek Flash (alias)",
     provider: "opencode-go",
     alias: "deepseek-flash",
     strategy: "latest",
@@ -127,6 +138,7 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
   },
   {
     key: "opencode-go/glm-flash",
+    displayName: "GLM Flash (alias)",
     provider: "opencode-go",
     alias: "glm-flash",
     strategy: "latest",
@@ -136,6 +148,7 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
   },
   {
     key: "opencode-go/qwen-flash",
+    displayName: "Qwen Flash (alias)",
     provider: "opencode-go",
     alias: "qwen-flash",
     strategy: "latest",
@@ -373,7 +386,7 @@ describe("TUI dialog navigation: select list and detail view", () => {
         text: "Summary text",
         rows: SAMPLE_ACTUAL8_ROWS,
       }),
-      selectReturnValue: undefined, // Simula cancelación
+      selectReturnValue: undefined, // Simulates cancellation
     });
     plugin.setup(harness.context);
     const command = harness.activeCommands[0];
@@ -385,7 +398,7 @@ describe("TUI dialog navigation: select list and detail view", () => {
     expect(call?.title).toBe("Model aliases");
     expect(call?.options).toHaveLength(8);
 
-    // Verificación de categorías por proveedor
+    // Provider category verification
     const categories = call?.options.map((o) => o.category);
     expect(categories).toEqual([
       "github-copilot",
@@ -398,23 +411,35 @@ describe("TUI dialog navigation: select list and detail view", () => {
       "opencode-go",
     ]);
 
-    // Verificación de títulos compactos (sin prefijo de proveedor)
+    // Compact title verification (no provider prefix)
     expect(call?.options.map((o) => o.title)).toEqual([
-      "gemini-flash",
-      "sonnet",
-      "gpt-luna",
+      "Gemini Flash (alias)",
+      "Sonnet (alias)",
+      "Custom GPT Luna",
       "gpt-sol",
-      "gpt-terra",
-      "deepseek-flash",
-      "glm-flash",
-      "qwen-flash",
+      "GPT Terra (alias)",
+      "DeepSeek Flash (alias)",
+      "GLM Flash (alias)",
+      "Qwen Flash (alias)",
     ]);
 
-    // Ninguna fila activa lleva etiqueta redundante (active)
+    // Verification of stable values (full keys)
+    expect(call?.options.map((o) => o.value)).toEqual([
+      "github-copilot/gemini-flash",
+      "github-copilot/sonnet",
+      "openai/gpt-luna",
+      "openai/gpt-sol",
+      "openai/gpt-terra",
+      "opencode-go/deepseek-flash",
+      "opencode-go/glm-flash",
+      "opencode-go/qwen-flash",
+    ]);
+
+    // No active row carries a redundant (active) label
     const activeSonnet = call?.options.find((o) => o.value === "github-copilot/sonnet");
     expect(activeSonnet?.footer).toBeUndefined();
 
-    // Las filas con problemas marcan su pie distintivamente
+    // Problem rows mark their footer distinctively
     const inactiveGlm = call?.options.find((o) => o.value === "opencode-go/glm-flash");
     expect(inactiveGlm?.footer).toBe("inactive");
 
@@ -422,7 +447,7 @@ describe("TUI dialog navigation: select list and detail view", () => {
     expect(unresolvedQwen?.footer).toBe("unresolved");
     expect(unresolvedQwen?.description).toContain("no-eligible");
 
-    // Cancelar el select es un no-op (no abre alert posterior)
+    // Cancelling the select is a no-op (no alert opens afterwards)
     expect(harness.alerts).toHaveLength(0);
   });
 
@@ -443,8 +468,10 @@ describe("TUI dialog navigation: select list and detail view", () => {
     expect(harness.alertSpy).toHaveBeenCalledTimes(1);
 
     const alert = harness.alerts[0];
-    expect(alert?.title).toBe("Model aliases: sonnet");
+    expect(alert?.title).toBe("Model aliases: Sonnet (alias)");
     expect(alert?.message).toContain("Alias: github-copilot/sonnet");
+    expect(alert?.message).toContain("Name: Sonnet (alias)");
+    expect(alert?.message).toContain("Alias model ID: sonnet");
     expect(alert?.message).toContain("Target: github-copilot/claude-3-5-sonnet-20241022");
     expect(alert?.message).toContain("Wire model ID: sonnet-4-exec");
     expect(alert?.message).toContain("Strategy: latest");
@@ -466,8 +493,10 @@ describe("TUI dialog navigation: select list and detail view", () => {
 
     expect(harness.alertSpy).toHaveBeenCalledTimes(1);
     const alert = harness.alerts[0];
-    expect(alert?.title).toBe("Model aliases: gpt-terra");
+    expect(alert?.title).toBe("Model aliases: GPT Terra (alias)");
     expect(alert?.message).toContain("Alias: openai/gpt-terra");
+    expect(alert?.message).toContain("Name: GPT Terra (alias)");
+    expect(alert?.message).toContain("Alias model ID: gpt-terra");
     expect(alert?.message).toContain("Target: openai/gpt-4o-2024-11-20");
     expect(alert?.message).not.toContain("Wire model ID");
   });
@@ -487,7 +516,10 @@ describe("TUI dialog navigation: select list and detail view", () => {
 
     expect(harness.alertSpy).toHaveBeenCalledTimes(1);
     const alert = harness.alerts[0];
-    expect(alert?.title).toBe("Model aliases: glm-flash");
+    expect(alert?.title).toBe("Model aliases: GLM Flash (alias)");
+    expect(alert?.message).toContain("Alias: opencode-go/glm-flash");
+    expect(alert?.message).toContain("Name: GLM Flash (alias)");
+    expect(alert?.message).toContain("Alias model ID: glm-flash");
     expect(alert?.message).toContain("Status: inactive (not in final catalog)");
   });
 
@@ -506,9 +538,89 @@ describe("TUI dialog navigation: select list and detail view", () => {
 
     expect(harness.alertSpy).toHaveBeenCalledTimes(1);
     const alert = harness.alerts[0];
-    expect(alert?.title).toBe("Model aliases: qwen-flash");
+    expect(alert?.title).toBe("Model aliases: Qwen Flash (alias)");
+    expect(alert?.message).toContain("Alias: opencode-go/qwen-flash");
+    expect(alert?.message).toContain("Name: Qwen Flash (alias)");
+    expect(alert?.message).toContain("Alias model ID: qwen-flash");
     expect(alert?.message).toContain("Status: unresolved (no-eligible)");
     expect(alert?.message).toContain("Reason: no candidate matched pattern");
+  });
+
+  it("seleccionar un alias con nombre explícito muestra displayName en selector y detalle", async () => {
+    const harness = createStrictContext({
+      inspectHandler: async () => ({
+        text: "Summary text",
+        rows: SAMPLE_ACTUAL8_ROWS,
+      }),
+      selectReturnValue: "openai/gpt-luna",
+    });
+    plugin.setup(harness.context);
+    const command = harness.activeCommands[0];
+
+    await command?.run();
+
+    expect(harness.alertSpy).toHaveBeenCalledTimes(1);
+    const alert = harness.alerts[0];
+    expect(alert?.title).toBe("Model aliases: Custom GPT Luna");
+    expect(alert?.message).toContain("Alias: openai/gpt-luna");
+    expect(alert?.message).toContain("Name: Custom GPT Luna");
+    expect(alert?.message).toContain("Alias model ID: gpt-luna");
+    expect(alert?.message).toContain("Target: openai/gpt-4o-mini-2024-07-18");
+  });
+
+  it("omite la línea Alias model ID cuando displayName coincide con el alias model ID", async () => {
+    const harness = createStrictContext({
+      inspectHandler: async () => ({
+        text: "Summary text",
+        rows: SAMPLE_ACTUAL8_ROWS,
+      }),
+      selectReturnValue: "openai/gpt-sol",
+    });
+    plugin.setup(harness.context);
+    const command = harness.activeCommands[0];
+
+    await command?.run();
+
+    expect(harness.alertSpy).toHaveBeenCalledTimes(1);
+    const alert = harness.alerts[0];
+    expect(alert?.title).toBe("Model aliases: gpt-sol");
+    expect(alert?.message).toContain("Alias: openai/gpt-sol");
+    expect(alert?.message).toContain("Name: gpt-sol");
+    expect(alert?.message).not.toContain("Alias model ID");
+  });
+
+  it("mantiene el key como valor estable de selección independientemente del displayName", async () => {
+    const harness = createStrictContext({
+      inspectHandler: async () => ({
+        text: "Summary text",
+        rows: [
+          {
+            key: "provider-x/custom-slug",
+            displayName: "Ultra Smart Model 5.0",
+            provider: "provider-x",
+            alias: "custom-slug",
+            strategy: "latest",
+            status: "active",
+            target: "underlying-model-v5",
+          },
+        ],
+      }),
+      selectReturnValue: "provider-x/custom-slug",
+    });
+    plugin.setup(harness.context);
+    const command = harness.activeCommands[0];
+
+    await command?.run();
+
+    const call = harness.selectCalls[0];
+    expect(call?.options[0]?.title).toBe("Ultra Smart Model 5.0");
+    expect(call?.options[0]?.value).toBe("provider-x/custom-slug");
+
+    const alert = harness.alerts[0];
+    expect(alert?.title).toBe("Model aliases: Ultra Smart Model 5.0");
+    expect(alert?.message).toContain("Alias: provider-x/custom-slug");
+    expect(alert?.message).toContain("Name: Ultra Smart Model 5.0");
+    expect(alert?.message).toContain("Alias model ID: custom-slug");
   });
 
   it("cuando no hay aliases configurados (rows:[]) abre alert nativo con el texto estático", async () => {
@@ -630,6 +742,32 @@ describe("TUI security, validation, and error boundaries", () => {
       { text: "ok", rows: "not-an-array" },
       { text: "ok", rows: [{ invalid: "row" }] },
       { text: "ok", rows: [{ key: 123 }] },
+      {
+        text: "ok",
+        rows: [
+          {
+            key: "github-copilot/sonnet",
+            // missing required displayName
+            provider: "github-copilot",
+            alias: "sonnet",
+            strategy: "latest",
+            status: "active",
+          },
+        ],
+      },
+      {
+        text: "ok",
+        rows: [
+          {
+            key: "github-copilot/sonnet",
+            displayName: 123,
+            provider: "github-copilot",
+            alias: "sonnet",
+            strategy: "latest",
+            status: "active",
+          },
+        ],
+      },
       "not an object",
     ]) {
       const harness = createStrictContext({
@@ -664,5 +802,85 @@ describe("TUI security, validation, and error boundaries", () => {
       "Unable to load model aliases. Please reload or try again.",
     );
     expect(harness.alerts[0]?.message).not.toContain("SECRET_TOKEN");
+  });
+
+  it("isInspectResponse rechaza filas sin displayName obligatorio o con tipo no string", () => {
+    expect(
+      isInspectResponse({
+        text: "ok",
+        rows: [
+          {
+            key: "github-copilot/sonnet",
+            // missing displayName
+            provider: "github-copilot",
+            alias: "sonnet",
+            strategy: "latest",
+            status: "active",
+          },
+        ],
+      }),
+    ).toBe(false);
+
+    expect(
+      isInspectResponse({
+        text: "ok",
+        rows: [
+          {
+            key: "github-copilot/sonnet",
+            displayName: null,
+            provider: "github-copilot",
+            alias: "sonnet",
+            strategy: "latest",
+            status: "active",
+          },
+        ],
+      }),
+    ).toBe(false);
+
+    expect(
+      isInspectResponse({
+        text: "ok",
+        rows: [
+          {
+            key: "github-copilot/sonnet",
+            displayName: "Sonnet (alias)",
+            provider: "github-copilot",
+            alias: "sonnet",
+            strategy: "latest",
+            status: "active",
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("formatDetailMessage preserva Alias: {key}, incluye Name: {displayName} y condiciona Alias model ID", () => {
+    const withDifferentName: InspectResponseRow = {
+      key: "anthropic/my-alias",
+      displayName: "Claude Sonnet (alias)",
+      provider: "anthropic",
+      alias: "my-alias",
+      strategy: "latest",
+      status: "active",
+      target: "claude-3-7-sonnet",
+    };
+    const formattedDifferent = formatDetailMessage(withDifferentName);
+    expect(formattedDifferent).toContain("Alias: anthropic/my-alias");
+    expect(formattedDifferent).toContain("Name: Claude Sonnet (alias)");
+    expect(formattedDifferent).toContain("Alias model ID: my-alias");
+
+    const withMatchingName: InspectResponseRow = {
+      key: "anthropic/my-alias",
+      displayName: "my-alias",
+      provider: "anthropic",
+      alias: "my-alias",
+      strategy: "latest",
+      status: "active",
+      target: "claude-3-7-sonnet",
+    };
+    const formattedMatching = formatDetailMessage(withMatchingName);
+    expect(formattedMatching).toContain("Alias: anthropic/my-alias");
+    expect(formattedMatching).toContain("Name: my-alias");
+    expect(formattedMatching).not.toContain("Alias model ID");
   });
 });
