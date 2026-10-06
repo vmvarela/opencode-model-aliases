@@ -100,6 +100,19 @@ describe("ModelAliasesRpc contract", () => {
               wireModelID: { type: "string" },
               failureKind: { type: "string" },
               failureReason: { type: "string" },
+              transition: {
+                type: "object",
+                properties: {
+                  id: { type: "string" },
+                  from: { type: "string" },
+                  to: { type: "string" },
+                  fromWireModelID: { type: "string" },
+                  toWireModelID: { type: "string" },
+                  changedAt: { type: "string" },
+                },
+                required: ["id", "from", "to", "fromWireModelID", "toWireModelID", "changedAt"],
+                additionalProperties: false,
+              },
             },
             required: ["key", "provider", "displayName", "alias", "strategy", "status"],
             additionalProperties: false,
@@ -185,7 +198,7 @@ describe("inspect report", () => {
     harness.replay();
     const text = await harness.inspect();
     expect(text).toContain("Sonnet (alias) (sonnet)\n    → sonnet-5");
-    expect(text).not.toContain("sonnet-4");
+    expect(text).toContain("Last change: github-copilot/sonnet-4 → github-copilot/sonnet-5");
   });
 
   it("cuando el objetivo desaparece, la fila pasa a unresolved con kind/reason", async () => {

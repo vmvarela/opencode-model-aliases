@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * Opt-in real-host smoke test against a locally installed OpenCode v2 CLI
- * (verified against v2.0.22; POSIX-only, fails fast on win32). Opt-in: NOT
- * part of `pnpm verify` or CI — runners don't install OpenCode.
+ * (POSIX-only, fails fast on win32). Runs in CI against pinned minimum and
+ * current hosts; also available locally when OpenCode is on PATH.
  *
  * What it does, concisely:
  *
@@ -52,7 +52,7 @@
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -151,7 +151,7 @@ function modelEntry(id, name, releaseDate) {
     temperature: true,
     modalities: { input: ["text"], output: ["text"] },
     release_date: releaseDate,
-    limit: { context: 8192, output: 4096 },
+    limit: { context: 128000, output: 4096 },
     cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
   };
 }
@@ -257,10 +257,10 @@ async function main() {
       version.code === 0 && !version.timedOut ? (match ? Number(match[1]) : null) : null;
     if (major !== 2) {
       throw new Error(
-        `OpenCode v2 CLI is required on PATH (probe: code=${version.code}, timedOut=${version.timedOut}, spawnError=${version.spawnError}, output=${JSON.stringify(probe.slice(0, 200))}). This smoke is opt-in and is NOT part of \`pnpm verify\`/CI.`,
+        `OpenCode v2 CLI is required on PATH (probe: code=${version.code}, timedOut=${version.timedOut}, spawnError=${version.spawnError}, output=${JSON.stringify(probe.slice(0, 200))}). Install @opencode/cli and rerun this smoke.`,
       );
     }
-    console.log("smoke:opencode: OpenCode CLI v2 detected.");
+    console.log(`smoke:opencode: OpenCode ${probe} detected.`);
 
     // Build first: stale dist must not make the smoke pass falsely.
     const build = await runSpawn("pnpm", ["run", "build"], {
@@ -545,6 +545,63 @@ async function main() {
             );
           }
         }
+      }
+
+      if (problems.length === 0) {
+        const baseline = reportRows.find((row) => row.key === ALIAS_KEY);
+        if (baseline.transition !== undefined)
+          problems.push("first resolution produced a false transition");
+        // Restart two standalone hosts under the same isolated HOME/location.
+        // Changing release metadata makes fake-small win without changing policy.
+        const catalog = JSON.parse(await readFile(path.join(dir, "models.json"), "utf8"));
+        catalog[PROVIDER].models["fake-small"].release_date = "2026-01-01";
+        await writeFile(path.join(dir, "models.json"), JSON.stringify(catalog));
+        const consumerFile = path.join(consumerDir, "index.js");
+        await writeFile(
+          consumerFile,
+          (await readFile(consumerFile, "utf8")).replaceAll("fake-large", "fake-small"),
+        );
+        let transitionID;
+        for (let restart = 0; restart < 2; restart++) {
+          const result = await runSpawn(
+            "opencode",
+            [
+              "api",
+              "--standalone",
+              "post",
+              "/api/rpc/opencode-model-aliases/inspect",
+              "--data",
+              JSON.stringify({ input: {} }),
+            ],
+            { cwd: project, env, timeoutMs: CLI_TIMEOUT_MS },
+          );
+          if (result.code !== 0 || result.timedOut || result.spawnError) {
+            problems.push(`history restart ${restart} failed: ${result.stderr.slice(-1500)}`);
+            continue;
+          }
+          let row;
+          try {
+            row = JSON.parse(result.stdout).output.rows.find((value) => value.key === ALIAS_KEY);
+          } catch {}
+          const change = row?.transition;
+          if (
+            row?.status !== "active" ||
+            row?.target !== "fake-small" ||
+            change?.from !== `${PROVIDER}/fake-large` ||
+            change?.to !== `${PROVIDER}/fake-small` ||
+            !Number.isFinite(Date.parse(change?.changedAt ?? ""))
+          ) {
+            problems.push(
+              `history restart ${restart} did not preserve confirmed A → B: ${JSON.stringify(row)}`,
+            );
+          }
+          if (restart === 0) transitionID = change?.id;
+          else if (!transitionID || change?.id !== transitionID)
+            problems.push("unchanged restart repeated the transition");
+        }
+        console.log(
+          "smoke:opencode: native storage and transition identity verified across restarts.",
+        );
       }
 
       // The sink counts EVERY provider request: zero after this bounded

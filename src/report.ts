@@ -2,6 +2,7 @@ import type { Candidate, NormalizedAlias } from "./config.js";
 import type { FailureKind } from "./errors.js";
 import { aliasDisplayName } from "./names.js";
 import type { ResolveResult } from "./resolve.js";
+import type { AliasTransition } from "./transition.js";
 
 /** Row status: the alias resolved or stayed unresolved (tolerant). */
 export type AliasReportStatus = "resolved" | "unresolved";
@@ -15,6 +16,7 @@ export type InspectRowStatus = "active" | "inactive" | "unresolved";
  * and the concise per-alias detail without parsing the text report.
  */
 export interface InspectReportRow {
+  readonly transition?: AliasTransition;
   readonly key: string;
   readonly provider: string;
   /** Visible name: the configured name kept intact, or the default generated one. */
@@ -35,6 +37,7 @@ export interface InspectReportRow {
  * headers, body, credentials or configuration objects.
  */
 export interface AliasReportRow {
+  readonly transition?: AliasTransition;
   /** Alias reference `<provider>/<model>` (configuration key). */
   readonly key: string;
   /** Only implemented strategy. */
@@ -120,9 +123,17 @@ export function buildInspectRows(
     const safeProvider = sanitize(provider);
     const safeAlias = sanitize(alias);
     const safeDisplayName = sanitize(row.displayName);
+    const transition = row.transition
+      ? {
+          transition: Object.fromEntries(
+            Object.entries(row.transition).map(([key, value]) => [key, sanitize(value)]),
+          ) as unknown as AliasTransition,
+        }
+      : {};
 
     if (row.status === "unresolved") {
       return {
+        ...transition,
         key,
         provider: safeProvider,
         displayName: safeDisplayName,
@@ -149,6 +160,7 @@ export function buildInspectRows(
         : catalogID;
 
     return {
+      ...transition,
       key,
       provider: safeProvider,
       displayName: safeDisplayName,
@@ -230,7 +242,7 @@ export function formatReport(
       if (row.status === "unresolved") {
         const kind = sanitize(row.failureKind ?? "unknown");
         const reason = row.failureReason ? `: ${sanitize(row.failureReason)}` : "";
-        return `  ${aliasLabel}\n    → unresolved (${kind})${reason}`;
+        return `  ${aliasLabel}\n    → unresolved (${kind})${reason}${formatTransition(row)}`;
       }
 
       const target =
@@ -245,11 +257,21 @@ export function formatReport(
       if (!visible.has(row.key)) {
         targetLine += " (inactive: not in final catalog)";
       }
-      return `  ${aliasLabel}\n${targetLine}`;
+      return `  ${aliasLabel}\n${targetLine}${formatTransition(row)}`;
     });
 
     return `${sanitize(provider)}\n${aliasBlocks.join("\n")}`;
   });
 
   return `Model aliases (strategy: latest)\n${summary}\n\n${sections.join("\n\n")}`;
+}
+
+function formatTransition(row: AliasReportRow): string {
+  const change = row.transition;
+  if (!change) return "";
+  const wire =
+    change.fromWireModelID === change.toWireModelID
+      ? ""
+      : ` (wire: ${sanitize(change.fromWireModelID)} → ${sanitize(change.toWireModelID)})`;
+  return `\n    Last change: ${sanitize(change.from)} → ${sanitize(change.to)}${wire}\n    Detected: ${sanitize(change.changedAt)}`;
 }

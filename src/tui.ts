@@ -1,5 +1,6 @@
 import type { Plugin } from "@opencode/plugin/tui";
 import { ModelAliasesRpc } from "./rpc.js";
+import { type AliasTransition, isAliasTransition } from "./transition.js";
 
 const COMMAND_ID = "opencode-model-aliases.inspect";
 const COMMAND_TITLE = "Model aliases";
@@ -10,6 +11,7 @@ const USAGE_MESSAGE =
 const ERROR_MESSAGE = "Unable to load model aliases. Please reload or try again.";
 
 export interface InspectResponseRow {
+  readonly transition?: AliasTransition;
   readonly key: string;
   readonly displayName: string;
   readonly provider: string;
@@ -48,6 +50,7 @@ function isInspectRow(value: unknown): value is InspectResponseRow {
   if (row.wireModelID !== undefined && typeof row.wireModelID !== "string") return false;
   if (row.failureKind !== undefined && typeof row.failureKind !== "string") return false;
   if (row.failureReason !== undefined && typeof row.failureReason !== "string") return false;
+  if (row.transition !== undefined && !isAliasTransition(row.transition)) return false;
   return true;
 }
 
@@ -87,12 +90,94 @@ export function formatDetailMessage(row: InspectResponseRow): string {
     );
   }
 
+  if (row.transition) {
+    const change = row.transition;
+    lines.push(`Last change: ${change.from} → ${change.to}`);
+    if (change.fromWireModelID !== change.toWireModelID) {
+      lines.push(`Wire change: ${change.fromWireModelID} → ${change.toWireModelID}`);
+    }
+    lines.push(`Detected: ${change.changedAt}`);
+  }
   return lines.join("\n");
 }
 
 const plugin = {
   id: "opencode-model-aliases",
   setup(context) {
+    let stopped = false;
+    let pending = Promise.resolve();
+    // Snapshot durable acknowledgments into client-local memory. The native
+    // store is live-synced between TUIs; an already open client may still show
+    // a transition once, independently of another client's acknowledgement.
+    const clients = new Map<
+      string,
+      {
+        shown: Map<string, string>;
+        save: (mutation: (draft: { aliases: Record<string, string> }) => void) => Promise<void>;
+      }
+    >();
+    const notify = () => {
+      pending = pending
+        .then(async () => {
+          if (stopped) return;
+          const location = context.location ?? context.data.location.default();
+          const response = await context.client.rpc(ModelAliasesRpc).inspect({}, { location });
+          if (stopped || !isInspectResponse(response)) return;
+          const scope = JSON.stringify([location?.directory ?? "", location?.workspaceID ?? ""]);
+          let client = clients.get(scope);
+          if (!client) {
+            const [saved, save] = context.storage.store<{ aliases: Record<string, string> }>(
+              `notifications-v1/${scope}`,
+              { initial: { aliases: {} } },
+            );
+            client = { shown: new Map(Object.entries(saved.aliases ?? {})), save };
+            clients.set(scope, client);
+          }
+          const { shown, save } = client;
+          const changed = response.rows.filter((row) => row.status === "active" && row.transition);
+          if (changed.length === 0) return;
+          const unseen = changed.filter((row) => {
+            return shown.get(row.key) !== row.transition?.id;
+          });
+          if (unseen.length === 0 || stopped) return;
+          const messages = unseen.slice(0, 3).map((row) => {
+            const change = row.transition as AliasTransition;
+            const wire =
+              change.from === change.to
+                ? ` (wire: ${change.fromWireModelID} → ${change.toWireModelID})`
+                : "";
+            return `${row.key}: ${change.from} → ${change.to}${wire}`;
+          });
+          if (unseen.length > 3) messages.push(`+${unseen.length - 3} more changes`);
+          context.ui.toast.show({
+            title: "Model aliases changed",
+            message: `${messages.join("\n")}\nSee /model-aliases for details.`,
+            variant: "info",
+            duration: 6000,
+          });
+          for (const row of unseen) shown.set(row.key, (row.transition as AliasTransition).id);
+          await save((draft) => {
+            for (const row of unseen)
+              draft.aliases[row.key] = (row.transition as AliasTransition).id;
+          });
+        })
+        .catch(() => {
+          // Notifications are optional; RPC/storage failures do not open dialogs
+          // or break the manual inspection command.
+        });
+      return pending;
+    };
+    const unlisten = context.data.on("model.updated", (event) => {
+      const location = context.location ?? context.data.location.default();
+      if (
+        event.location &&
+        (event.location.directory !== location?.directory ||
+          event.location.workspaceID !== location?.workspaceID)
+      )
+        return;
+      void notify();
+    });
+    void notify();
     const command = {
       id: COMMAND_ID,
       title: COMMAND_TITLE,
@@ -183,7 +268,7 @@ const plugin = {
       },
     };
 
-    return context.ui.slot({
+    const disposeSlot = context.ui.slot({
       append: "app",
       render: () => {
         context.keymap.layer(() => ({
@@ -193,6 +278,12 @@ const plugin = {
         return null;
       },
     });
+    return async () => {
+      stopped = true;
+      unlisten();
+      disposeSlot();
+      await pending;
+    };
   },
 } satisfies Plugin.Definition;
 
