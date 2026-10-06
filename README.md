@@ -4,11 +4,17 @@
 [![CI](https://github.com/vmvarela/opencode-model-aliases/actions/workflows/ci.yml/badge.svg)](https://github.com/vmvarela/opencode-model-aliases/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+**Stop hardcoding model versions in your OpenCode config.**
+
 An [OpenCode](https://opencode.ai) v2 plugin that materializes **floating model aliases**
 into the model catalog. Configure an alias once — say `anthropic/smart` — and the plugin
 picks the newest matching source model at every catalog refresh, exposing it under a stable
 ID. Your configuration and prompts keep working as the provider ships new models; you never
 hard-code a model ID that goes stale.
+
+A concrete reference pins a model. A floating alias names a selection policy: the stable
+ID stays the same while its eligible target can change. Use a concrete reference when
+you want to keep a specific model; use this plugin when you want to follow a model family.
 
 ## Why
 
@@ -61,6 +67,8 @@ Then define aliases in `.opencode/opencode-model-aliases.jsonc` next to your pro
 ```
 
 Restart OpenCode. Type `/model-aliases` to see what each alias resolved to.
+
+See [the OMO-slim example](https://github.com/vmvarela/opencode-model-aliases/blob/master/docs/oh-my-opencode-slim.md) for agent presets using stable IDs.
 
 > OpenCode caches installed plugin packages. Apply a newer release with
 > `opencode plugin update opencode-model-aliases@latest`; restarting alone won't update it.
@@ -198,6 +206,28 @@ The report reflects the last **successful** catalog replay; if the last replay f
 get a clear "unavailable" message instead of a stale mapping. With no aliases configured
 the report is `No aliases configured.`
 
+### Target changes
+
+The first confirmed resolution establishes a silent baseline. Later changes show a
+grouped TUI toast and remain visible in `/model-aliases`, including the previous target,
+current target and detection time. Inspection RPC rows expose the same optional
+`transition` object. A change in the execution `modelID` also counts, even when the catalog
+ID stays the same. Changes may move to an older model; notifications do not claim upgrades.
+
+History uses OpenCode's native plugin storage, scoped by directory/workspace and each
+alias's effective selection policy. Changing a policy resets that alias's baseline;
+renaming it or changing debug/strict settings does not. Only the last confirmed target
+and the most recent transition are stored. `changedAt` is the observation time, not the
+model's release date. Failed reads, unresolved aliases and inactive mappings do not
+overwrite the baseline. Recovery to the same target produces no new transition.
+
+The server observes native `model.updated` events and confirmed inspection reads, even
+without a TUI. Each open TUI keeps local notification acknowledgments. Native TUI storage
+also remembers acknowledgments across restarts of the same profile; newly opened clients
+sharing that profile inherit them. Already open clients can each show the change once.
+There is no cross-client delivery coordination. Storage or notification failures leave
+normal alias resolution working; persistence and notification delivery are best effort.
+
 ## Limitations
 
 - Only the `latest` strategy exists; other strategies are rejected at startup.
@@ -216,9 +246,11 @@ pnpm run verify        # lint + typecheck + tests + build (self-contained)
 pnpm run check:release # offline release checks; run after verify before opening a PR
 ```
 
-Opt-in real-host smoke tests against a locally installed OpenCode v2 CLI (not part of
-`pnpm verify` or CI, [#29](https://github.com/vmvarela/opencode-model-aliases/issues/29)):
-`pnpm smoke:opencode` (end-to-end session) and `pnpm smoke:inspect` (inspect RPC against
-the real host surface).
+CI verifies Node.js 22 and 24, plus the minimum supported OpenCode **2.0.16** and the
+current pinned host **2.0.24**. Both host jobs load the packed npm artifact, verify the
+concrete wire model against a local fake provider, and inspect through the real RPC
+without model calls. Inspection also verifies native history across host restarts.
+Run locally with an installed OpenCode v2 CLI: `pnpm smoke:opencode` and
+`pnpm smoke:inspect`. These are separate from the self-contained `pnpm verify` checks.
 
 MIT License — see [LICENSE](LICENSE).

@@ -51,6 +51,8 @@ interface SelectCall {
 }
 
 interface StrictContextOptions {
+  notificationStorage?: Map<string, { aliases: Record<string, string> }>;
+  storageFailure?: boolean;
   location?: { directory: string } | undefined;
   defaultLocation?: { directory: string } | undefined;
   inspectHandler?:
@@ -159,6 +161,10 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
 ];
 
 function createStrictContext(options?: StrictContextOptions) {
+  const notificationStorage =
+    options?.notificationStorage ?? new Map<string, { aliases: Record<string, string> }>();
+  const toasts: Array<{ title: string; message: string }> = [];
+  const eventHandlers = new Set<(event: { location?: { directory: string } }) => void>();
   const registeredLayers: Array<() => KeymapLayer> = [];
   const returnedLayers: KeymapLayer[] = [];
   const activeCommands: KeymapCommand[] = [];
@@ -247,7 +253,12 @@ function createStrictContext(options?: StrictContextOptions) {
     session: forbiddenProxy("data.session"),
     project: forbiddenProxy("data.project"),
     shell: forbiddenProxy("data.shell"),
-    on: vi.fn(),
+    on: vi.fn((_type: string, handler: (event: { location?: { directory: string } }) => void) => {
+      eventHandlers.add(handler);
+      return () => {
+        eventHandlers.delete(handler);
+      };
+    }),
     listen: vi.fn(),
   };
 
@@ -283,7 +294,11 @@ function createStrictContext(options?: StrictContextOptions) {
       confirm: forbiddenProxy("ui.dialog.confirm"),
       prompt: forbiddenProxy("ui.dialog.prompt"),
     },
-    toast: forbiddenProxy("ui.toast"),
+    toast: {
+      show: vi.fn((toast: { title: string; message: string }) => {
+        toasts.push(toast);
+      }),
+    },
     router: forbiddenProxy("ui.router"),
     panel: forbiddenProxy("ui.panel"),
     tabs: forbiddenProxy("ui.tabs"),
@@ -304,12 +319,30 @@ function createStrictContext(options?: StrictContextOptions) {
     themeMode: "dark",
     markdown: { registerCodeBlockRenderer: vi.fn() },
     keymap,
-    storage: forbiddenProxy("storage"),
+    storage: {
+      store: (key: string, { initial }: { initial: { aliases: Record<string, string> } }) => {
+        if (options?.storageFailure) throw new Error("private storage failure");
+        const state = notificationStorage.get(key) ?? structuredClone(initial);
+        notificationStorage.set(key, state);
+        return [
+          state,
+          async (mutation: (draft: typeof state) => void) => {
+            mutation(state);
+          },
+        ] as const;
+      },
+    },
     ui,
   };
 
   return {
     context: context as unknown as Plugin.Context,
+    notificationStorage,
+    toasts,
+    emitModelUpdate: (location?: { directory: string }) => {
+      for (const handler of eventHandlers) handler(location ? { location } : {});
+    },
+    eventHandlers,
     keymap,
     client,
     data,
@@ -366,13 +399,13 @@ describe("TUI slash and command palette registration", () => {
     expect(harness.activeCommands[0]?.id).toBe("opencode-model-aliases.inspect");
   });
 
-  it("unregisters command when the slot cleanup runs", () => {
+  it("unregisters command when the slot cleanup runs", async () => {
     const harness = createStrictContext();
     const cleanup = plugin.setup(harness.context);
 
     expect(harness.activeCommands).toHaveLength(1);
     if (typeof cleanup === "function") {
-      cleanup();
+      await cleanup();
     }
     expect(harness.isSlotDisposed()).toBe(true);
     expect(harness.activeCommands).toHaveLength(0);
@@ -676,7 +709,7 @@ describe("TUI security, validation, and error boundaries", () => {
 
     await command?.run();
 
-    expect(harness.inspectCalls).toHaveLength(1);
+    expect(harness.inspectCalls).toHaveLength(2);
     expect(harness.selectSpy).toHaveBeenCalledTimes(1);
     expect(harness.alertSpy).toHaveBeenCalledTimes(1);
   });
@@ -709,7 +742,7 @@ describe("TUI security, validation, and error boundaries", () => {
 
     await command?.run();
 
-    expect(harness.defaultLocationSpy).toHaveBeenCalledTimes(1);
+    expect(harness.defaultLocationSpy).toHaveBeenCalledTimes(2);
     expect(harness.inspectCalls[0]).toEqual({
       input: {},
       options: { location: { directory: "/fallback/default" } },
@@ -723,13 +756,13 @@ describe("TUI security, validation, and error boundaries", () => {
 
     await command?.run("extra-argument");
 
-    expect(harness.inspectCalls).toHaveLength(0);
+    expect(harness.inspectCalls).toHaveLength(1); // Startup notification check only.
     expect(harness.alerts).toHaveLength(1);
     expect(harness.alerts[0]?.title).toBe("Model aliases");
     expect(harness.alerts[0]?.message).toMatch(/unexpected arguments/i);
 
     await command?.run("  --flag  ");
-    expect(harness.inspectCalls).toHaveLength(0);
+    expect(harness.inspectCalls).toHaveLength(1); // Startup notification check only.
     expect(harness.alerts).toHaveLength(2);
   });
 
@@ -882,5 +915,104 @@ describe("TUI security, validation, and error boundaries", () => {
     expect(formattedMatching).toContain("Alias: anthropic/my-alias");
     expect(formattedMatching).toContain("Name: my-alias");
     expect(formattedMatching).not.toContain("Alias model ID");
+  });
+});
+
+describe("TUI change notifications", () => {
+  const transition = (id = "transition-1") => ({
+    id,
+    from: "github-copilot/sonnet-old",
+    to: "github-copilot/sonnet-new",
+    fromWireModelID: "sonnet-old",
+    toWireModelID: "sonnet-new",
+    changedAt: "2026-10-06T12:00:00.000Z",
+  });
+  it("shows changes once, persists acknowledgement across restarts, and keeps detail available", async () => {
+    let row: InspectResponseRow = SAMPLE_ROW_ACTIVE;
+    const response = async () => ({ text: "ok", rows: [row] });
+    const first = createStrictContext({
+      inspectHandler: response,
+      location: { directory: "/project" },
+    });
+    const close = plugin.setup(first.context);
+    await vi.waitFor(() => expect(first.notificationStorage.size).toBe(1));
+    expect(first.toasts).toHaveLength(0);
+    row = { ...SAMPLE_ROW_ACTIVE, transition: transition() };
+    first.emitModelUpdate({ directory: "/unrelated" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(first.toasts).toHaveLength(0);
+    first.emitModelUpdate({ directory: "/project" });
+    await vi.waitFor(() => expect(first.toasts).toHaveLength(1));
+    expect(first.toasts[0]?.message).toContain("sonnet-old → github-copilot/sonnet-new");
+    first.emitModelUpdate();
+    await first.activeCommands[0]?.run();
+    expect(first.toasts).toHaveLength(1);
+    if (typeof close === "function") await close();
+    expect(first.eventHandlers.size).toBe(0);
+    const restarted = createStrictContext({
+      inspectHandler: response,
+      location: { directory: "/project" },
+      notificationStorage: first.notificationStorage,
+    });
+    plugin.setup(restarted.context);
+    await vi.waitFor(() => expect(restarted.inspectCalls).toHaveLength(1));
+    await restarted.activeCommands[0]?.run();
+    expect(restarted.toasts).toHaveLength(0);
+    expect(formatDetailMessage(row)).toContain("Detected: 2026-10-06T12:00:00.000Z");
+  });
+
+  it("lets already open clients show a transition independently and groups multiple changes", async () => {
+    let change: ReturnType<typeof transition> | undefined;
+    const shared = new Map<string, { aliases: Record<string, string> }>();
+    const response = async () => ({
+      text: "ok",
+      rows: [
+        { ...SAMPLE_ROW_ACTIVE, ...(change ? { transition: change } : {}) },
+        {
+          ...SAMPLE_ROW_ACTIVE,
+          key: "github-copilot/other",
+          ...(change ? { transition: { ...change, id: "other-id" } } : {}),
+        },
+      ],
+    });
+    const first = createStrictContext({ inspectHandler: response, notificationStorage: shared });
+    const second = createStrictContext({ inspectHandler: response, notificationStorage: shared });
+    plugin.setup(first.context);
+    plugin.setup(second.context);
+    await vi.waitFor(() => expect(shared.size).toBe(1));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    change = transition();
+    first.emitModelUpdate();
+    await vi.waitFor(() => expect(first.toasts).toHaveLength(1));
+    second.emitModelUpdate();
+    await vi.waitFor(() => expect(second.toasts).toHaveLength(1));
+    expect(first.toasts[0]?.message).toContain("github-copilot/other");
+  });
+
+  it("ignores malformed/inactive history and contains notification storage failures", async () => {
+    expect(
+      isInspectResponse({ text: "ok", rows: [{ ...SAMPLE_ROW_ACTIVE, transition: { id: 1 } }] }),
+    ).toBe(false);
+    const inactive = createStrictContext({
+      inspectHandler: async () => ({
+        text: "ok",
+        rows: [{ ...SAMPLE_ROW_ACTIVE, status: "inactive", transition: transition() }],
+      }),
+    });
+    plugin.setup(inactive.context);
+    await inactive.activeCommands[0]?.run();
+    expect(inactive.toasts).toHaveLength(0);
+    const failure = createStrictContext({
+      storageFailure: true,
+      inspectHandler: async () => ({
+        text: "ok",
+        rows: [{ ...SAMPLE_ROW_ACTIVE, transition: transition() }],
+      }),
+    });
+    plugin.setup(failure.context);
+    await failure.activeCommands[0]?.run();
+    expect(failure.toasts).toHaveLength(0);
+    expect(failure.selectSpy).toHaveBeenCalledTimes(1);
+    expect(failure.alerts).toHaveLength(0);
   });
 });

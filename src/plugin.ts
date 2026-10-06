@@ -1,6 +1,7 @@
 import { type Model, Plugin } from "@opencode/plugin";
 import { isPlainObject, type NormalizedConfig, type Options } from "./config.js";
 import { loadConfigFile } from "./config-file.js";
+import { createHistory } from "./history.js";
 import { aliasDisplayName } from "./names.js";
 import { normalizeOptions } from "./normalize.js";
 import {
@@ -172,6 +173,8 @@ export default Plugin.define({
       );
     }
 
+    const history = await createHistory(ctx.storage, ctx.location, normalized.config.aliases);
+
     // The v2 host swallows transform exceptions (State.get catches, disables
     // the plugin and rebuilds the state), so the first ctx.model.list() may
     // resolve successfully after a failure. We capture the first error only
@@ -204,8 +207,15 @@ export default Plugin.define({
       }
     });
 
+    type FinalCatalog = ReadonlyArray<{
+      providerID: string;
+      id: string;
+      modelID?: string;
+      enabled?: boolean;
+    }>;
+    let initialCatalog: FinalCatalog;
     try {
-      await ctx.model.list();
+      initialCatalog = (await ctx.model.list()).data;
     } catch (error) {
       initializing = false;
       await registration.dispose();
@@ -218,73 +228,98 @@ export default Plugin.define({
     }
     initializing = false;
 
-    // Single RPC of the plugin, registered after successful initialization.
-    // The handler does NOT re-resolve or query provider/session APIs to
-    // inspect: it first syncs the registry with ctx.model.list() (which also
-    // reveals whether a refresh failed) and then reads the snapshot published
-    // by the transform, verifying the identity of every resolved alias against
-    // the final catalog (a later policy may retire, disable or rewrite the
-    // execution modelID of the materialized alias).
+    // Serialize confirmation/storage outside the synchronous transform. A later
+    // transform can disable or rewrite aliases; only the final catalog counts.
+    const readInspection = async (confirmed?: FinalCatalog) => {
+      // Minimal view of the final catalog; identity primitives only
+      // (provider, id, execution modelID and enabled). No full
+      // Model.Info objects, settings, headers or credentials.
+      let catalog: FinalCatalog;
+      try {
+        catalog = confirmed ?? (await ctx.model.list()).data;
+      } catch {
+        // The refresh failed: neither the previous snapshot nor a partial
+        // one; unavailability text and empty rows.
+        return { text: UNAVAILABLE_REPORT, rows: [] };
+      }
+      const snapshot = reportRows;
+      if (snapshot === null) {
+        return { text: UNAVAILABLE_REPORT, rows: [] };
+      }
+      // Final visibility by primitives: an alias disabled by a later
+      // policy is not labeled active; a retired alias keeps the existing
+      // behavior (inactive).
+      const wire = new Map<string, string | undefined>();
+      const visible = new Set<string>();
+      for (const model of catalog) {
+        const entry = `${model.providerID}/${model.id}`;
+        wire.set(entry, model.modelID);
+        if (model.enabled !== false) visible.add(entry);
+      }
+      // Identity guard: if the alias is still enabled but a later policy
+      // rewrote its execution modelID away from the selected one, the
+      // snapshot no longer describes the real mapping. Instead of guessing
+      // or showing the old target as active, the whole report becomes
+      // unavailable (rare conflicting-policy case).
+      for (const row of snapshot) {
+        if (row.status !== "resolved" || !visible.has(row.key)) continue;
+        const selected = row.wireModelID ?? row.catalogID;
+        if (wire.get(row.key) !== selected) {
+          return { text: UNAVAILABLE_REPORT, rows: [] };
+        }
+      }
+      const rows = await history.observe(snapshot, visible);
+      return {
+        text: formatReport(rows, visible),
+        rows: buildInspectRows(rows, visible),
+      };
+    };
+    let pending = Promise.resolve();
+    let stopped = false;
+    const inspect = () => {
+      const result = pending.then(() => readInspection());
+      pending = result.then(
+        () => {},
+        () => {},
+      );
+      return result;
+    };
     let rpcRegistration: { dispose: () => Promise<void> };
     try {
-      rpcRegistration = await ctx.rpc.register(ModelAliasesRpc, {
-        inspect: async () => {
-          // Minimal view of the final catalog; identity primitives only
-          // (provider, id, execution modelID and enabled). No full
-          // Model.Info objects, settings, headers or credentials.
-          let catalog: ReadonlyArray<{
-            providerID: string;
-            id: string;
-            modelID?: string;
-            enabled?: boolean;
-          }>;
-          try {
-            catalog = (await ctx.model.list()).data;
-          } catch {
-            // The refresh failed: neither the previous snapshot nor a partial
-            // one; unavailability text and empty rows.
-            return { text: UNAVAILABLE_REPORT, rows: [] };
-          }
-          const snapshot = reportRows;
-          if (snapshot === null) {
-            return { text: UNAVAILABLE_REPORT, rows: [] };
-          }
-          // Final visibility by primitives: an alias disabled by a later
-          // policy is not labeled active; a retired alias keeps the existing
-          // behavior (inactive).
-          const wire = new Map<string, string | undefined>();
-          const visible = new Set<string>();
-          for (const model of catalog) {
-            const entry = `${model.providerID}/${model.id}`;
-            wire.set(entry, model.modelID);
-            if (model.enabled !== false) visible.add(entry);
-          }
-          // Identity guard: if the alias is still enabled but a later policy
-          // rewrote its execution modelID away from the selected one, the
-          // snapshot no longer describes the real mapping. Instead of guessing
-          // or showing the old target as active, the whole report becomes
-          // unavailable (rare conflicting-policy case).
-          for (const row of snapshot) {
-            if (row.status !== "resolved" || !visible.has(row.key)) continue;
-            const selected = row.wireModelID ?? row.catalogID;
-            if (wire.get(row.key) !== selected) {
-              return { text: UNAVAILABLE_REPORT, rows: [] };
-            }
-          }
-          return {
-            text: formatReport(snapshot, visible),
-            rows: buildInspectRows(snapshot, visible),
-          };
-        },
-      });
+      rpcRegistration = await ctx.rpc.register(ModelAliasesRpc, { inspect });
     } catch (error) {
-      // The model is already registered: if the RPC could not be registered,
-      // setup rejects leaving zero live resources.
       await registration.dispose();
       throw error;
     }
 
+    // Do not persist a baseline if RPC registration rejects and the setup group
+    // rolls back. Queue the initial confirmation before listening for updates.
+    pending = readInspection(initialCatalog).then(() => {});
+    const abort = new AbortController();
+    const watching = (async () => {
+      try {
+        for await (const event of ctx.event.subscribe({ signal: abort.signal })) {
+          if (stopped) break;
+          if (event.type !== "model.updated") continue;
+          if (
+            event.location &&
+            (event.location.directory !== ctx.location.directory ||
+              event.location.workspaceID !== ctx.location.workspaceID)
+          )
+            continue;
+          await inspect();
+        }
+      } catch {
+        // A closed event stream must not disable selection or inspection.
+      }
+    })();
+    await pending;
+
     return async () => {
+      stopped = true;
+      abort.abort();
+      await watching;
+      await pending;
       // Cleanup in reverse registration order: first the RPC, then the
       // transform. Both dispose calls are idempotent.
       await rpcRegistration.dispose();

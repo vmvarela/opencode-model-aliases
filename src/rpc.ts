@@ -3,7 +3,7 @@ import type { Rpc } from "@opencode/plugin";
 /**
  * Public RPC contract of the plugin, consumed by the TUI (which imports only
  * this module, never the backend barrel): id "opencode-model-aliases" and a
- * single `inspect` method with empty object input and `{ text }` output, no
+ * single `inspect` method with empty object input and `{ text, rows }` output, no
  * events. Portable definition built from plain JSON Schema objects, no schema
  * library at runtime (pinned @opencode/plugin 2.0.16).
  */
@@ -33,6 +33,19 @@ export const ModelAliasesRpc = {
                 wireModelID: { type: "string" },
                 failureKind: { type: "string" },
                 failureReason: { type: "string" },
+                transition: {
+                  type: "object",
+                  properties: {
+                    id: { type: "string" },
+                    from: { type: "string" },
+                    to: { type: "string" },
+                    fromWireModelID: { type: "string" },
+                    toWireModelID: { type: "string" },
+                    changedAt: { type: "string" },
+                  },
+                  required: ["id", "from", "to", "fromWireModelID", "toWireModelID", "changedAt"],
+                  additionalProperties: false,
+                },
               },
               required: ["key", "provider", "displayName", "alias", "strategy", "status"],
               additionalProperties: false,

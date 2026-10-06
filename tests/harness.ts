@@ -90,6 +90,8 @@ export function createHarness(input: {
   directory?: string;
   /** If set, ctx.rpc.register rejects with this error. */
   rpcRegisterError?: unknown;
+  storage?: Map<string, unknown>;
+  workspaceID?: string;
 }) {
   const source = new Map<string, ModelInfo>();
   for (const model of input.sources ?? []) {
@@ -141,8 +143,35 @@ export function createHarness(input: {
     if (index >= 0) callbacks.splice(index, 1);
   };
 
+  const storage = input.storage ?? new Map<string, unknown>();
+  const events: Array<{ type: string; location?: { directory: string; workspaceID?: string } }> =
+    [];
+  let wake: (() => void) | undefined;
   const ctx = {
-    location: { directory: input.directory },
+    storage: {
+      get: async (key: string) => structuredClone(storage.get(key)),
+      set: async (key: string, value: unknown) => {
+        storage.set(key, structuredClone(value));
+      },
+    },
+    event: {
+      async *subscribe({ signal }: { signal: AbortSignal }) {
+        const abort = () => wake?.();
+        signal.addEventListener("abort", abort);
+        try {
+          while (!signal.aborted) {
+            if (events.length === 0)
+              await new Promise<void>((resolve) => {
+                wake = resolve;
+              });
+            while (!signal.aborted && events.length > 0) yield events.shift();
+          }
+        } finally {
+          signal.removeEventListener("abort", abort);
+        }
+      },
+    },
+    location: { directory: input.directory, workspaceID: input.workspaceID },
     options: input.options ?? {},
     model: {
       transform: async (callback: (editor: unknown) => void) => {
@@ -177,7 +206,7 @@ export function createHarness(input: {
           }
         }
         return {
-          location: { directory: input.directory },
+          location: { directory: input.directory, workspaceID: input.workspaceID },
           data: editor.list(),
         };
       },
@@ -232,6 +261,11 @@ export function createHarness(input: {
 
   return {
     ctx,
+    storage,
+    emitModelUpdate: (location?: { directory: string; workspaceID?: string }) => {
+      events.push({ type: "model.updated", ...(location ? { location } : {}) });
+      wake?.();
+    },
     /** Visible state after the last replay/list (derived). */
     view: () => working,
     callbacks,
