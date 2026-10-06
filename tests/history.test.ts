@@ -100,6 +100,22 @@ describe("confirmed target history", () => {
     });
   });
 
+  it("does not persist a transition when setup rolls back after RPC registration fails", async () => {
+    const storage = new Map<string, unknown>();
+    await plugin.setup(harness(storage).ctx);
+    const baseline = JSON.stringify([...storage.values()]);
+    const failed = createHarness({
+      storage,
+      sources: [B()],
+      options,
+      directory: "/virtual/history",
+      rpcRegisterError: new Error("registration failed"),
+    });
+    await expect(plugin.setup(failed.ctx)).rejects.toThrow("registration failed");
+    expect(JSON.stringify([...storage.values()])).toBe(baseline);
+    expect(failed.callbacks).toHaveLength(0);
+  });
+
   it("isolates locations and resets only changed effective policies", async () => {
     const storage = new Map<string, unknown>();
     await plugin.setup(harness(storage).ctx);

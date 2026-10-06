@@ -284,8 +284,6 @@ export default Plugin.define({
       );
       return result;
     };
-    await readInspection(initialCatalog); // Reuse the forced initial read.
-
     let rpcRegistration: { dispose: () => Promise<void> };
     try {
       rpcRegistration = await ctx.rpc.register(ModelAliasesRpc, { inspect });
@@ -294,6 +292,9 @@ export default Plugin.define({
       throw error;
     }
 
+    // Do not persist a baseline if RPC registration rejects and the setup group
+    // rolls back. Queue the initial confirmation before listening for updates.
+    pending = readInspection(initialCatalog).then(() => {});
     const abort = new AbortController();
     const watching = (async () => {
       try {
@@ -312,6 +313,7 @@ export default Plugin.define({
         // A closed event stream must not disable selection or inspection.
       }
     })();
+    await pending;
 
     return async () => {
       stopped = true;
