@@ -191,6 +191,9 @@ was detected. Changing an alias's match or filter rules resets its baseline.
 - Only the `latest` strategy exists. The plugin can't rank by price or quality.
 - Aliases are provider-isolated and never chain.
 - The plugin only reads OpenCode's catalog; it never fetches external model lists.
+- Models hidden with `disabled: true` in your OpenCode provider config can still be selected
+  by an alias ([#42](https://github.com/vmvarela/opencode-model-aliases/issues/42)). Use
+  `exclude` to keep a model out of an alias.
 
 ## Development
 
