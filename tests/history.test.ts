@@ -88,6 +88,18 @@ describe("confirmed target history", () => {
     expect((await rows(host))[0]?.transition).toMatchObject({ from: "p/model-a", to: "p/model-b" });
   });
 
+  it("does not read the catalog or write history through an RPC queued after disposal", async () => {
+    const host = harness();
+    const close = await plugin.setup(host.ctx);
+    await close?.();
+    const reads = host.counters.list;
+    const saved = JSON.stringify([...host.storage.values()]);
+    host.addSource(B());
+    expect(await rows(host)).toEqual([]);
+    expect(host.counters.list).toBe(reads);
+    expect(JSON.stringify([...host.storage.values()])).toBe(saved);
+  });
+
   it("records execution identity changes even if the catalog identity does not change", async () => {
     const host = harness();
     await plugin.setup(host.ctx);

@@ -53,6 +53,7 @@ interface SelectCall {
 interface StrictContextOptions {
   notificationStorage?: Map<string, { aliases: Record<string, string> }>;
   storageFailure?: boolean;
+  saveNotification?: () => Promise<void>;
   location?: { directory: string } | undefined;
   defaultLocation?: { directory: string } | undefined;
   inspectHandler?:
@@ -327,6 +328,7 @@ function createStrictContext(options?: StrictContextOptions) {
         return [
           state,
           async (mutation: (draft: typeof state) => void) => {
+            await options?.saveNotification?.();
             mutation(state);
           },
         ] as const;
@@ -742,7 +744,7 @@ describe("TUI security, validation, and error boundaries", () => {
 
     await command?.run();
 
-    expect(harness.defaultLocationSpy).toHaveBeenCalledTimes(2);
+    expect(harness.defaultLocationSpy).toHaveBeenCalled();
     expect(harness.inspectCalls[0]).toEqual({
       input: {},
       options: { location: { directory: "/fallback/default" } },
@@ -959,6 +961,49 @@ describe("TUI change notifications", () => {
     await restarted.activeCommands[0]?.run();
     expect(restarted.toasts).toHaveLength(0);
     expect(formatDetailMessage(row)).toContain("Detected: 2026-10-06T12:00:00.000Z");
+  });
+
+  it("retries failed acknowledgements without showing the toast again", async () => {
+    const save = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("disk unavailable"))
+      .mockResolvedValue(undefined);
+    const response = async () => ({
+      text: "ok",
+      rows: [{ ...SAMPLE_ROW_ACTIVE, transition: transition() }],
+    });
+    const first = createStrictContext({ inspectHandler: response, saveNotification: save });
+    const close = plugin.setup(first.context);
+    await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    first.emitModelUpdate();
+    await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(first.toasts).toHaveLength(1);
+    if (typeof close === "function") await close();
+    const restarted = createStrictContext({
+      inspectHandler: response,
+      notificationStorage: first.notificationStorage,
+    });
+    const stop = plugin.setup(restarted.context);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(restarted.toasts).toHaveLength(0);
+    if (typeof stop === "function") await stop();
+  });
+
+  it("discards a notification response when the active location changed while awaiting RPC", async () => {
+    let reply!: (value: unknown) => void;
+    const host = createStrictContext({
+      inspectHandler: () =>
+        new Promise((resolve) => {
+          reply = resolve;
+        }),
+    });
+    const stop = plugin.setup(host.context);
+    await vi.waitFor(() => expect(host.inspectCalls).toHaveLength(1));
+    host.defaultLocationSpy.mockReturnValue({ directory: "/different-project" });
+    reply({ text: "ok", rows: [{ ...SAMPLE_ROW_ACTIVE, transition: transition() }] });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(host.toasts).toHaveLength(0);
+    if (typeof stop === "function") await stop();
   });
 
   it("lets already open clients show a transition independently and groups multiple changes", async () => {
