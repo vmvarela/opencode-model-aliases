@@ -4,17 +4,17 @@ import { isPlainObject, type NormalizedAlias } from "./config.js";
 import type { AliasReportRow } from "./report.js";
 import { type AliasTransition, isAliasTransition } from "./transition.js";
 
-interface Target {
+type Target = {
   providerID: string;
   catalogID: string;
   wireModelID: string;
-}
-interface Entry {
+};
+type Entry = {
   key: string;
   policy: string;
   target: Target;
   transition?: AliasTransition;
-}
+};
 
 function hash(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -115,7 +115,13 @@ export async function createHistory(
           wireModelID: row.wireModelID ?? row.catalogID,
         };
         const previous = entries.get(row.key);
-        if (previous && JSON.stringify(previous.target) === JSON.stringify(target)) continue;
+        if (
+          previous &&
+          previous.target.providerID === target.providerID &&
+          previous.target.catalogID === target.catalogID &&
+          previous.target.wireModelID === target.wireModelID
+        )
+          continue;
         entries.set(row.key, {
           key: row.key,
           policy,
@@ -137,11 +143,7 @@ export async function createHistory(
       }
       if (dirty) {
         try {
-          // Round-trip strips optional undefined fields to the SDK's JSON type.
-          await storage.set(
-            storageKey,
-            JSON.parse(JSON.stringify({ version: 1, aliases: [...entries.values()] })),
-          );
+          await storage.set(storageKey, { version: 1, aliases: [...entries.values()] });
           dirty = false;
         } catch {
           // Retry the same state on the next confirmed read, without a fake change.

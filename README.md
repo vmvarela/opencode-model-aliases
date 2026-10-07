@@ -68,8 +68,6 @@ Then define aliases in `.opencode/opencode-model-aliases.jsonc` next to your pro
 
 Restart OpenCode. Type `/model-aliases` to see what each alias resolved to.
 
-See [the OMO-slim example](https://github.com/vmvarela/opencode-model-aliases/blob/master/docs/oh-my-opencode-slim.md) for agent presets using stable IDs.
-
 > OpenCode caches installed plugin packages. Apply a newer release with
 > `opencode plugin update opencode-model-aliases@latest`; restarting alone won't update it.
 

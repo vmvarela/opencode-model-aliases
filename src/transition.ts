@@ -1,13 +1,13 @@
 import { isPlainObject } from "./config.js";
 
-export interface AliasTransition {
+export type AliasTransition = {
   readonly id: string;
   readonly from: string;
   readonly to: string;
   readonly fromWireModelID: string;
   readonly toWireModelID: string;
   readonly changedAt: string;
-}
+};
 
 export function isAliasTransition(value: unknown): value is AliasTransition {
   return (

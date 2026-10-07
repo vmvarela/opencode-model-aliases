@@ -277,7 +277,9 @@ export default Plugin.define({
     let pending = Promise.resolve();
     let stopped = false;
     const inspect = () => {
-      const result = pending.then(() => readInspection());
+      const result = pending.then(() =>
+        stopped ? { text: UNAVAILABLE_REPORT, rows: [] } : readInspection(),
+      );
       pending = result.then(
         () => {},
         () => {},
