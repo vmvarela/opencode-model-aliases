@@ -71,9 +71,9 @@ afterEach(() => {
 });
 
 describe("ModelAliasesRpc contract", () => {
-  it("fija id, método único inspect con esquema JSON vacío, salida {text, rows} y sin eventos", () => {
+  it("preserva inspect y añade explain sin eventos", () => {
     expect(ModelAliasesRpc.id).toBe("opencode-model-aliases");
-    expect(Object.keys(ModelAliasesRpc.methods)).toEqual(["inspect"]);
+    expect(Object.keys(ModelAliasesRpc.methods)).toEqual(["explain", "inspect"]);
     expect(ModelAliasesRpc.methods.inspect.input).toEqual({
       type: "object",
       properties: {},

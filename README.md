@@ -186,6 +186,27 @@ The first resolution sets a silent baseline. When an alias later changes target,
 a toast and `/model-aliases` shows the previous target, the current target and when the change
 was detected. Changing an alias's match or filter rules resets its baseline.
 
+### Explain one alias
+
+Run `/model-aliases explain github-copilot/sonnet` to see matching patterns,
+rejected candidates and their reasons, and why the winner was selected. Eligible
+runners-up show whether they lost on release date or the descending model ID
+tie-break. Models outside the alias provider/include patterns are counted rather
+than listed. The regular `/model-aliases` view remains compact.
+
+The backend exposes `explain({ alias: "github-copilot/sonnet" })` on the existing
+`opencode-model-aliases` RPC. Its structured report comes from the same resolution
+that materialized the alias, confirmed against the final catalog. It contains
+public decision fields only, with stable reason codes and deterministic ordering.
+An unresolved alias identifies the failed stage; an inactive alias retains its
+selection explanation. Failed refreshes or conflicting downstream rewrites return
+`unavailable`, and an unconfigured key returns `unknown-alias`.
+
+Explanation uses the catalog visible to the plugin's transform; the existing
+config-disabled model limitation still applies. In strict mode, a startup failure
+prevents the plugin and its RPC from becoming available. Explanation performs no
+model requests and adds no persistent history or automatic logging.
+
 ## Limitations
 
 - Only the `latest` strategy exists. The plugin can't rank by price or quality.

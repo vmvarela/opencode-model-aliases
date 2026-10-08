@@ -1,5 +1,7 @@
 import type { Candidate, NormalizedAlias } from "./config.js";
 import { failure, type ResolveFailure } from "./errors.js";
+import type { CandidateExplanation, ResolutionExplanation } from "./explain.js";
+import { sanitize } from "./report.js";
 
 export interface Stage {
   name: "matching" | "filtering" | "selection";
@@ -17,7 +19,7 @@ function canonical(candidate: Candidate): string {
 
 /** Reliable date: finite number greater than 0 (milliseconds). */
 function releasedMs(candidate: Candidate): number {
-  const released = candidate.time.released;
+  const released = candidate.time?.released;
   return typeof released === "number" && Number.isFinite(released) && released > 0 ? released : 0;
 }
 
@@ -87,86 +89,160 @@ function requirementSummary(alias: NormalizedAlias, keys: ReadonlySet<string>): 
 export function resolveLatest<T extends Candidate>(
   models: readonly T[],
   alias: NormalizedAlias,
-): { ok: true; model: T; stages: Stage[] } | { ok: false; failure: ResolveFailure } {
-  if (!Array.isArray(models)) {
-    return { ok: false, failure: failure("no-candidates", "source list must be an array") };
-  }
+): ResolveResult<T> & { explanation: ResolutionExplanation } {
   const stages: Stage[] = [];
+  const explanation: ResolutionExplanation = {
+    alias: sanitize(alias.key),
+    strategy: "latest",
+    stages,
+    unmatched: 0,
+    candidates: [],
+  };
+  const details: Array<{ id: string; detail: CandidateExplanation }> = [];
+  const fail = (stage: Stage["name"], kind: ResolveFailure["kind"], reason: string) => {
+    explanation.failure = { stage, code: kind, message: sanitize(reason) };
+    return { ok: false as const, failure: failure(kind, reason), explanation };
+  };
+  if (!Array.isArray(models)) {
+    return fail("matching", "no-candidates", "source list must be an array");
+  }
 
-  // Stage 1: matching — includes and excludes against the canonical id.
-  const matched = models.filter((candidate) => {
-    // Defense in depth: provider equality does not depend on the matchers.
-    if (candidate.providerID !== alias.provider) return false;
+  // Record decisions where they are made; never run a second resolver for explain.
+  const matched = models.flatMap((candidate) => {
     const id = canonical(candidate);
-    if (!alias.includes.some((check) => check(id))) return false;
-    return !alias.excludes.some((check) => check(id));
+    if (candidate.providerID !== alias.provider) {
+      explanation.unmatched++;
+      return [];
+    }
+    const included = alias.includes.map((check) => check(id));
+    const patterns = alias.match.filter((_, index) => included[index]);
+    if (!included.some(Boolean)) {
+      explanation.unmatched++;
+      return [];
+    }
+    const exclusions = alias.excludes.map((check) => check(id));
+    const excluded = alias.exclude.filter((_, index) => exclusions[index]);
+    const detail: CandidateExplanation = {
+      id: sanitize(id),
+      matchedPatterns: patterns.map(sanitize),
+      stage: "matching",
+      outcome: "rejected",
+      reasons: [],
+    };
+    details.push({ id, detail });
+    if (exclusions.some(Boolean)) {
+      detail.reasons.push({
+        code: "excluded-pattern",
+        message: `Excluded by ${excluded.map(sanitize).join(", ")}`,
+      });
+    }
+    return exclusions.some(Boolean) ? [] : [{ candidate, detail }];
   });
+  // Sort raw IDs, before escaping, using locale-independent code unit order.
+  explanation.candidates = details
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .map(({ detail }) => detail);
   stages.push({ name: "matching", accepted: matched.length });
   if (matched.length === 0) {
-    return {
-      ok: false,
-      failure:
-        models.length === 0
-          ? failure("no-candidates", "source list is empty")
-          : failure("no-eligible", "no candidate matched match/exclude patterns"),
-    };
+    return models.length === 0
+      ? fail("matching", "no-candidates", "source list is empty")
+      : fail("matching", "no-eligible", "no candidate matched match/exclude patterns");
   }
 
-  // Stage 2: filtering — enabled + statuses + configured capability/context
-  // requirements, all AND together in the eligibility stage.
-  const statusEligible = matched.filter(
-    (candidate) => candidate.enabled !== false && alias.statuses.includes(candidate.status),
-  );
-  const eligible = statusEligible.filter(
-    (candidate) => unmetRequirements(candidate, alias).length === 0,
-  );
+  const statusEligible = matched.filter(({ candidate, detail }) => {
+    detail.stage = "filtering";
+    if (candidate.enabled === false)
+      detail.reasons.push({ code: "disabled", message: "Model is disabled" });
+    if (!alias.statuses.includes(candidate.status))
+      detail.reasons.push({
+        code: "status-not-allowed",
+        message: `Status "${sanitize(candidate.status)}" is not allowed`,
+      });
+    return detail.reasons.length === 0;
+  });
+  const unmet = new Set<string>();
+  const eligible = statusEligible.filter(({ candidate, detail }) => {
+    const keys = unmetRequirements(candidate, alias);
+    for (const key of keys) {
+      unmet.add(key);
+      const value =
+        key === "minContext"
+          ? candidate.limit?.context
+          : candidate.capabilities?.[key as "tools" | "input" | "output"];
+      const missing =
+        key === "minContext"
+          ? typeof value !== "number" || !Number.isFinite(value)
+          : key === "tools"
+            ? typeof value !== "boolean"
+            : !Array.isArray(value);
+      detail.reasons.push({
+        code: missing ? "missing-metadata" : "requirement-not-met",
+        message: `${missing ? "Missing or invalid metadata for" : "Does not satisfy"} ${sanitize(requirementSummary(alias, new Set([key])))}`,
+      });
+    }
+    return keys.length === 0;
+  });
   stages.push({ name: "filtering", accepted: eligible.length });
   if (eligible.length === 0) {
-    // Keep the old diagnostic when enabled/status checks already dropped
-    // everyone; otherwise the new requirements are the identifiable cause.
-    if (statusEligible.length === 0) {
-      return {
-        ok: false,
-        failure: failure("no-eligible", "no candidate passed enabled/status filtering"),
-      };
-    }
-    // Agrega las claves de requisitos incumplidos individualmente en todo el
-    // conjunto de candidatos, deduplicadas, para listar solo los checks que
-    // realmente fallan.
-    const unmet = new Set<string>();
-    for (const candidate of statusEligible) {
-      for (const key of unmetRequirements(candidate, alias)) unmet.add(key);
-    }
-    return {
-      ok: false,
-      failure: failure(
-        "no-eligible",
-        `no candidate satisfied all configured requirements (unmet across the candidate set: ${requirementSummary(alias, unmet)})`,
-      ),
-    };
+    return fail(
+      "filtering",
+      "no-eligible",
+      statusEligible.length === 0
+        ? "no candidate passed enabled/status filtering"
+        : `no candidate satisfied all configured requirements (unmet across the candidate set: ${requirementSummary(alias, unmet)})`,
+    );
   }
 
-  // Stage 3: selection — latest; unknown dates never win.
-  const known = eligible.filter((candidate) => releasedMs(candidate) > 0);
+  const known = eligible.filter(({ candidate, detail }) => {
+    detail.stage = "selection";
+    const released = releasedMs(candidate);
+    if (released === 0) {
+      detail.reasons.push({
+        code: "missing-metadata",
+        message: "Missing or invalid time.released timestamp",
+      });
+      return false;
+    }
+    detail.released = released;
+    return true;
+  });
+  stages.push({ name: "selection", accepted: known.length > 0 ? 1 : 0 });
   if (known.length === 0) {
-    return {
-      ok: false,
-      failure: failure(
-        "missing-metadata",
-        "no eligible candidate has a reliable time.released timestamp",
-      ),
-    };
+    return fail(
+      "selection",
+      "missing-metadata",
+      "no eligible candidate has a reliable time.released timestamp",
+    );
   }
-  const sorted = [...known].sort((a, b) => {
+  const sorted = [...known].sort(({ candidate: a }, { candidate: b }) => {
     const delta = releasedMs(b) - releasedMs(a);
     if (delta !== 0) return delta;
-    if (a.id === b.id) return 0;
-    // Descending, code unit order, locale-independent.
-    return a.id < b.id ? 1 : -1;
+    return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
   });
-  const winner = sorted[0];
-  if (!winner) {
-    return { ok: false, failure: failure("no-eligible", "selection produced no candidate") };
+  const first = sorted[0];
+  if (!first) return fail("selection", "no-eligible", "selection produced no candidate");
+  const winner = first.candidate;
+  const second = sorted[1]?.candidate;
+  const tied = second !== undefined && releasedMs(second) === releasedMs(winner);
+  for (const { candidate, detail } of sorted) {
+    detail.outcome = candidate === winner ? "selected" : "eligible";
+    const tie = releasedMs(candidate) === releasedMs(winner);
+    detail.reasons.push(
+      candidate === winner
+        ? {
+            code: tied ? "id-tiebreak" : "newest-release",
+            message: tied
+              ? "Newest release; won the descending model ID tie-break"
+              : "Newest eligible candidate with a reliable release timestamp",
+          }
+        : {
+            code: tie ? "id-tiebreak" : "older-release",
+            message: tie
+              ? "Same release timestamp; lost the descending model ID tie-break"
+              : "Older release than the selected candidate",
+          },
+    );
   }
-  return { ok: true, model: winner, stages: [...stages, { name: "selection", accepted: 1 }] };
+  explanation.winner = sanitize(canonical(winner));
+  return { ok: true, model: winner, stages, explanation };
 }

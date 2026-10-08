@@ -56,6 +56,7 @@ interface StrictContextOptions {
   saveNotification?: () => Promise<void>;
   location?: { directory: string } | undefined;
   defaultLocation?: { directory: string } | undefined;
+  explainHandler?: (input: unknown, options?: { location?: unknown }) => Promise<unknown>;
   inspectHandler?:
     | ((
         input: Record<string, never>,
@@ -221,6 +222,9 @@ function createStrictContext(options?: StrictContextOptions) {
     rpc: vi.fn((definition: unknown) => {
       expect(definition).toBe(ModelAliasesRpc);
       return {
+        explain: vi.fn(async (input: unknown, rpcOptions?: { location?: unknown }) => {
+          return options?.explainHandler?.(input, rpcOptions) ?? { status: "unknown-alias" };
+        }),
         inspect: vi.fn(
           async (input: Record<string, never>, rpcOptions?: { location?: unknown }) => {
             inspectCalls.push({ input, options: rpcOptions });
@@ -1059,5 +1063,64 @@ describe("TUI change notifications", () => {
     expect(failure.toasts).toHaveLength(0);
     expect(failure.selectSpy).toHaveBeenCalledTimes(1);
     expect(failure.alerts).toHaveLength(0);
+  });
+});
+
+describe("TUI explain action", () => {
+  it("uses structured explain RPC with the current location and renders its decision", async () => {
+    const explainHandler = vi.fn(async () => ({
+      status: "active",
+      explanation: {
+        alias: "p/alias",
+        strategy: "latest",
+        unmatched: 3,
+        stages: [
+          { name: "matching", accepted: 1 },
+          { name: "filtering", accepted: 1 },
+          { name: "selection", accepted: 1 },
+        ],
+        winner: "p/model",
+        candidates: [
+          {
+            id: "p/model",
+            matchedPatterns: ["p/*"],
+            outcome: "selected",
+            stage: "selection",
+            released: 1000,
+            reasons: [{ code: "newest-release", message: "Newest eligible candidate" }],
+          },
+        ],
+      },
+    }));
+    const location = { directory: "/project" };
+    const harness = createStrictContext({ explainHandler, location });
+    const stop = plugin.setup(harness.context);
+    await harness.activeCommands[0]?.run(" explain p/alias ");
+    expect(explainHandler).toHaveBeenCalledWith({ alias: "p/alias" }, { location });
+    expect(harness.alerts.at(-1)?.message).toContain("✓ p/model (selected)");
+    expect(harness.alerts.at(-1)?.message).toContain("Newest eligible candidate");
+    expect(harness.selectCalls).toHaveLength(0);
+    await stop?.();
+  });
+
+  it("rejects invalid syntax locally and handles unknown, unavailable, malformed and failed RPC", async () => {
+    const explainHandler = vi.fn(async (): Promise<unknown> => ({ status: "unknown-alias" }));
+    const harness = createStrictContext({ explainHandler });
+    const stop = plugin.setup(harness.context);
+    for (const input of ["explain", "explain p/a extra", "reload"])
+      await harness.activeCommands[0]?.run(input);
+    expect(explainHandler).not.toHaveBeenCalled();
+    await harness.activeCommands[0]?.run("explain p/a");
+    expect(harness.alerts.at(-1)?.message).toContain("Unknown alias");
+    explainHandler.mockResolvedValueOnce({ status: "unavailable" });
+    await harness.activeCommands[0]?.run("explain p/a");
+    expect(harness.alerts.at(-1)?.message).toContain("unavailable");
+    explainHandler.mockResolvedValueOnce({ status: "active", explanation: {} });
+    await harness.activeCommands[0]?.run("explain p/a");
+    expect(harness.alerts.at(-1)?.message).toContain("Unable to load");
+    explainHandler.mockRejectedValueOnce(new Error("PRIVATE"));
+    await harness.activeCommands[0]?.run("explain p/a");
+    expect(harness.alerts.at(-1)?.message).not.toContain("PRIVATE");
+    await stop?.();
   });
 });

@@ -1,4 +1,5 @@
 import type { Plugin } from "@opencode/plugin/tui";
+import { formatExplanation, isExplainResponse } from "./explain.js";
 import type { InspectReportRow } from "./report.js";
 import { ModelAliasesRpc } from "./rpc.js";
 import { type AliasTransition, isAliasTransition } from "./transition.js";
@@ -8,7 +9,7 @@ const COMMAND_TITLE = "Model aliases";
 const SLASH_COMMAND_NAME = "model-aliases";
 
 const USAGE_MESSAGE =
-  "Unexpected arguments. Use /model-aliases without arguments to view configured model aliases.";
+  "Unexpected arguments. Use /model-aliases or /model-aliases explain <provider/alias>.";
 const ERROR_MESSAGE = "Unable to load model aliases. Please reload or try again.";
 
 export type InspectResponseRow = InspectReportRow;
@@ -193,7 +194,24 @@ const plugin = {
         arguments: true as const,
       },
       run: async (input?: string) => {
-        if (input !== undefined && input.trim() !== "") {
+        const args = input?.trim() ?? "";
+        const explainMatch = /^explain\s+(\S+)$/.exec(args);
+        if (explainMatch?.[1]) {
+          const location = context.location ?? context.data.location.default();
+          try {
+            const response = await context.client
+              .rpc(ModelAliasesRpc)
+              .explain({ alias: explainMatch[1] }, { location });
+            await context.ui.dialog.alert({
+              title: "Model alias explanation",
+              message: isExplainResponse(response) ? formatExplanation(response) : ERROR_MESSAGE,
+            });
+          } catch {
+            await context.ui.dialog.alert({ title: COMMAND_TITLE, message: ERROR_MESSAGE });
+          }
+          return;
+        }
+        if (args !== "") {
           await context.ui.dialog.alert({
             title: COMMAND_TITLE,
             message: USAGE_MESSAGE,
