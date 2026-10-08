@@ -251,10 +251,10 @@ export default Plugin.define({
         return { text: UNAVAILABLE_REPORT, rows: [] };
       }
       const current = report;
-      const snapshot = current?.rows ?? null;
-      if (snapshot === null) {
+      if (current === null) {
         return { text: UNAVAILABLE_REPORT, rows: [] };
       }
+      const snapshot = current.rows;
       // Final visibility by primitives: an alias disabled by a later
       // policy is not labeled active; a retired alias keeps the existing
       // behavior (inactive).
@@ -278,10 +278,14 @@ export default Plugin.define({
         }
       }
       const rows = await history.observe(snapshot, visible);
+      // Storage is asynchronous: a host replay may supersede this decision while
+      // history is being saved. Never present that old mapping as current.
+      if (report !== current) return { text: UNAVAILABLE_REPORT, rows: [] };
       return {
         text: formatReport(rows, visible),
         rows: buildInspectRows(rows, visible),
-        explanations: current?.explanations,
+        report: current,
+        visible,
       };
     };
     let pending = Promise.resolve();
@@ -312,10 +316,18 @@ export default Plugin.define({
         if (!normalized.config.aliases.some((entry) => entry.key === alias))
           return { status: "unknown-alias" };
         const inspection = await readInspection();
-        const explanation = inspection.explanations?.get(alias);
-        const row = inspection.rows.find((entry) => entry.key === sanitize(alias));
+        const explanation = inspection.report?.explanations.get(alias);
+        // Escaped display keys are not identities: different raw keys can render
+        // identically (for example a newline and a literal "\\u000a").
+        const row = inspection.report?.rows.find((entry) => entry.key === alias);
         if (!explanation || !row) return { status: "unavailable" };
-        return { status: row.status, explanation: structuredClone(explanation) };
+        const status =
+          row.status === "unresolved"
+            ? "unresolved"
+            : inspection.visible?.has(alias)
+              ? "active"
+              : "inactive";
+        return { status, explanation: structuredClone(explanation) };
       });
       pending = result.then(
         () => {},

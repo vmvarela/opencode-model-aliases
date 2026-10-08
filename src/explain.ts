@@ -1,3 +1,4 @@
+import { isPlainObject } from "./config.js";
 import { sanitize } from "./report.js";
 import type { Stage } from "./resolve.js";
 
@@ -31,12 +32,13 @@ export type ExplainResponse =
   | { status: "unknown-alias" }
   | { status: "unavailable" };
 
-const stageNames = ["matching", "filtering", "selection"];
-function object(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function isStage(value: unknown): value is Stage["name"] {
+  return value === "matching" || value === "filtering" || value === "selection";
 }
 function reason(value: unknown): value is ExplanationReason {
-  return object(value) && typeof value.code === "string" && typeof value.message === "string";
+  return (
+    isPlainObject(value) && typeof value.code === "string" && typeof value.message === "string"
+  );
 }
 function count(value: unknown): boolean {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
@@ -44,12 +46,13 @@ function count(value: unknown): boolean {
 
 /** Validate the transport before rendering; the UI never evaluates selection rules. */
 export function isExplainResponse(value: unknown): value is ExplainResponse {
-  if (!object(value)) return false;
+  if (!isPlainObject(value)) return false;
   if (value.status === "unknown-alias" || value.status === "unavailable") return true;
-  if (!["active", "inactive", "unresolved"].includes(String(value.status))) return false;
+  if (value.status !== "active" && value.status !== "inactive" && value.status !== "unresolved")
+    return false;
   const report = value.explanation;
   if (
-    !object(report) ||
+    !isPlainObject(report) ||
     typeof report.alias !== "string" ||
     report.strategy !== "latest" ||
     !count(report.unmatched) ||
@@ -60,23 +63,29 @@ export function isExplainResponse(value: unknown): value is ExplainResponse {
   if (report.winner !== undefined && typeof report.winner !== "string") return false;
   if (
     report.failure !== undefined &&
-    (!object(report.failure) ||
-      !reason(report.failure) ||
-      !stageNames.includes(String(report.failure.stage)))
+    (!isPlainObject(report.failure) || !reason(report.failure) || !isStage(report.failure.stage))
+  )
+    return false;
+  if (
+    value.status === "unresolved"
+      ? report.failure === undefined || report.winner !== undefined
+      : report.winner === undefined || report.failure !== undefined
   )
     return false;
   return (
     report.stages.every(
-      (stage) => object(stage) && stageNames.includes(String(stage.name)) && count(stage.accepted),
+      (stage) => isPlainObject(stage) && isStage(stage.name) && count(stage.accepted),
     ) &&
     report.candidates.every(
       (candidate) =>
-        object(candidate) &&
+        isPlainObject(candidate) &&
         typeof candidate.id === "string" &&
         Array.isArray(candidate.matchedPatterns) &&
         candidate.matchedPatterns.every((pattern) => typeof pattern === "string") &&
-        stageNames.includes(String(candidate.stage)) &&
-        ["selected", "eligible", "rejected"].includes(String(candidate.outcome)) &&
+        isStage(candidate.stage) &&
+        (candidate.outcome === "selected" ||
+          candidate.outcome === "eligible" ||
+          candidate.outcome === "rejected") &&
         Array.isArray(candidate.reasons) &&
         candidate.reasons.every(reason) &&
         (candidate.released === undefined ||

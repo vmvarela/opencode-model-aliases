@@ -134,3 +134,18 @@ describe("resolution explanation", () => {
     expect(formatExplanation({ status: "unavailable" })).toContain("unavailable");
   });
 });
+
+it("rejects coerced enum values and incomplete resolution outcomes", () => {
+  const explanation = resolve([model("m-a")]).explanation;
+  expect(isExplainResponse({ status: ["active"], explanation })).toBe(false);
+  const stages = structuredClone(explanation);
+  Object.assign(stages.stages[0] ?? {}, { name: ["matching"] });
+  expect(isExplainResponse({ status: "active", explanation: stages })).toBe(false);
+  const candidates = structuredClone(explanation);
+  Object.assign(candidates.candidates[0] ?? {}, { outcome: ["selected"] });
+  expect(isExplainResponse({ status: "active", explanation: candidates })).toBe(false);
+  const noWinner = structuredClone(explanation);
+  delete noWinner.winner;
+  expect(isExplainResponse({ status: "active", explanation: noWinner })).toBe(false);
+  expect(isExplainResponse({ status: "unresolved", explanation })).toBe(false);
+});

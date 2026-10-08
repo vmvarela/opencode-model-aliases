@@ -712,3 +712,59 @@ describe("explain RPC", () => {
     await stop?.();
   });
 });
+
+describe("inspection snapshot regressions", () => {
+  it.each(["inspect", "explain"])(
+    "%s does not publish a snapshot superseded while history is saved",
+    async (method) => {
+      const harness = createHarness({ sources: DEFAULT_SOURCES(), options: SIMPLE_OPTIONS() });
+      const stop = await floatingModels.setup(harness.ctx);
+      const handler = harness.rpc.handlers[0]?.[method];
+      if (!handler) throw new Error("missing RPC handler");
+      harness.addSource(
+        sourceModel({ id: "sonnet-5", providerID: "github-copilot", released: 5000 }),
+      );
+      vi.spyOn(harness.ctx.storage, "set").mockImplementationOnce(async () => {
+        harness.addSource(
+          sourceModel({ id: "sonnet-6", providerID: "github-copilot", released: 6000 }),
+        );
+        harness.replay();
+      });
+      const response = await handler(
+        method === "explain" ? { alias: "github-copilot/sonnet" } : {},
+        {},
+      );
+      expect(response).toMatchObject(
+        method === "explain" ? { status: "unavailable" } : { rows: [] },
+      );
+      const next = await harness.rpc.handlers[0]?.explain?.({ alias: "github-copilot/sonnet" }, {});
+      expect(next).toMatchObject({
+        status: "active",
+        explanation: { winner: "github-copilot/sonnet-6" },
+      });
+      await stop?.();
+    },
+  );
+
+  it("looks up status by raw alias identity even when display escapes collide", async () => {
+    const harness = createHarness({
+      sources: DEFAULT_SOURCES(),
+      options: {
+        aliases: {
+          "github-copilot/a\n": { match: "github-copilot/missing-*" },
+          "github-copilot/a\\u000a": { match: "github-copilot/sonnet-*" },
+        },
+      },
+    });
+    const stop = await floatingModels.setup(harness.ctx);
+    const response = await harness.rpc.handlers[0]?.explain?.(
+      { alias: "github-copilot/a\\u000a" },
+      {},
+    );
+    expect(response).toMatchObject({
+      status: "active",
+      explanation: { winner: "github-copilot/sonnet-4" },
+    });
+    await stop?.();
+  });
+});
