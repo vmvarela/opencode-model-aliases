@@ -1121,34 +1121,137 @@ describe("TUI explain action", () => {
     expect(call?.options).toEqual([
       {
         category: "overview",
-        title: "Resolution overview",
-        description: "matching: 2 → filtering: 2 → selection: 1",
+        title: "Overview",
+        description: "match: 2 → filter: 2 → select: 1",
         footer: "active",
         value: "__overview__",
       },
       {
         category: "selected",
-        title: "p/winner",
-        description: "Newest eligible candidate",
-        footer: "selection",
+        title: "winner",
+        footer: undefined,
         value: "p/winner",
       },
       {
         category: "eligible",
-        title: "p/older",
-        description: "Older release than the selected candidate",
-        footer: "selection",
+        title: "older",
+        footer: undefined,
         value: "p/older",
       },
       {
         category: "rejected",
-        title: "p/rejected",
-        description: "Does not satisfy minContext>=100",
+        title: "rejected",
         footer: "filtering",
         value: "p/rejected",
       },
     ]);
     expect(harness.alerts).toHaveLength(0);
+    await stop?.();
+  });
+
+  it("enforces narrow-row information policy for small terminals", async () => {
+    const explainHandler = vi.fn(async () => ({
+      status: "active",
+      explanation: {
+        alias: "opencode/zen-plan",
+        strategy: "latest",
+        unmatched: 3,
+        stages: [
+          { name: "matching", accepted: 9 },
+          { name: "filtering", accepted: 9 },
+          { name: "selection", accepted: 1 },
+        ],
+        winner: "opencode/longcat-2.5-preview-free",
+        candidates: [
+          {
+            id: "opencode/longcat-2.5-preview-free",
+            matchedPatterns: ["opencode/*-free"],
+            outcome: "selected",
+            stage: "selection",
+            released: 1700000000000,
+            reasons: [
+              {
+                code: "newest-release",
+                message: "Newest eligible candidate with a reliable release timestamp",
+              },
+            ],
+          },
+          {
+            id: "opencode/muse-spark-1.3-contributor-free",
+            matchedPatterns: ["opencode/*-free"],
+            outcome: "eligible",
+            stage: "selection",
+            released: 1600000000000,
+            reasons: [
+              { code: "older-release", message: "Older release than the selected candidate" },
+            ],
+          },
+          {
+            id: "opencode/exo-free",
+            matchedPatterns: ["opencode/*-free"],
+            outcome: "rejected",
+            stage: "matching",
+            reasons: [{ code: "excluded-pattern", message: "Excluded by opencode/exo-*" }],
+          },
+          {
+            id: "opencode/mimo-v2.6-flash-free",
+            matchedPatterns: ["opencode/*-free"],
+            outcome: "rejected",
+            stage: "filtering",
+            reasons: [
+              { code: "requirement-not-met", message: "Does not satisfy minContext>=256000" },
+            ],
+          },
+        ],
+      },
+    }));
+    const harness = createStrictContext({
+      explainHandler,
+      selectReturnValue: "opencode/mimo-v2.6-flash-free",
+    });
+    const stop = plugin.setup(harness.context);
+    await harness.activeCommands[0]?.run("explain opencode/zen-plan");
+    expect(harness.selectCalls).toHaveLength(1);
+    const call = harness.selectCalls[0];
+
+    // Overview: compact title and stage names, preserves status footer
+    const overview = call?.options.find((o) => o.value === "__overview__");
+    expect(overview?.title).toBe("Overview");
+    expect(overview?.description).toBe("match: 9 → filter: 9 → select: 1");
+    expect(overview?.footer).toBe("active");
+
+    // Candidates: strip provider prefix for compact title
+    expect(call?.options.map((o) => o.title)).toEqual([
+      "Overview",
+      "longcat-2.5-preview-free",
+      "muse-spark-1.3-contributor-free",
+      "exo-free",
+      "mimo-v2.6-flash-free",
+    ]);
+
+    // Candidates: no reason descriptions in rows to avoid horizontal clipping
+    const candidateOptions = call?.options.filter((o) => o.value !== "__overview__");
+    expect(candidateOptions?.every((o) => o.description === undefined)).toBe(true);
+
+    // Candidates: non-rejected rows omit footers; rejected rows show only stage
+    const selectedOpt = call?.options.find((o) => o.value === "opencode/longcat-2.5-preview-free");
+    expect(selectedOpt?.footer).toBeUndefined();
+    const eligibleOpt = call?.options.find(
+      (o) => o.value === "opencode/muse-spark-1.3-contributor-free",
+    );
+    expect(eligibleOpt?.footer).toBeUndefined();
+    const rejectedMatching = call?.options.find((o) => o.value === "opencode/exo-free");
+    expect(rejectedMatching?.footer).toBe("matching");
+    const rejectedFiltering = call?.options.find(
+      (o) => o.value === "opencode/mimo-v2.6-flash-free",
+    );
+    expect(rejectedFiltering?.footer).toBe("filtering");
+
+    // Detail alert preserves full canonical ID and full reason text
+    expect(harness.alerts.at(-1)?.title).toBe("Candidate: opencode/mimo-v2.6-flash-free");
+    expect(harness.alerts.at(-1)?.message).toContain("✗ opencode/mimo-v2.6-flash-free (rejected)");
+    expect(harness.alerts.at(-1)?.message).toContain("Does not satisfy minContext>=256000");
+
     await stop?.();
   });
 

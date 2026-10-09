@@ -228,6 +228,13 @@ const plugin = {
               return;
             }
 
+            const compactStage = (name: string) => {
+              if (name === "matching") return "match";
+              if (name === "filtering") return "filter";
+              if (name === "selection") return "select";
+              return name;
+            };
+
             const options: Array<{
               category?: string;
               title: string;
@@ -237,12 +244,18 @@ const plugin = {
             }> = [
               {
                 category: "overview",
-                title: "Resolution overview",
-                description: report.stages.map((s) => `${s.name}: ${s.accepted}`).join(" → "),
+                title: "Overview",
+                description: report.stages
+                  .map((s) => `${compactStage(s.name)}: ${s.accepted}`)
+                  .join(" → "),
                 footer: response.status,
                 value: "__overview__",
               },
             ];
+
+            const providerPrefix = report.alias.includes("/")
+              ? `${report.alias.split("/")[0]}/`
+              : "";
 
             const selectedCandidates = report.candidates.filter((c) => c.outcome === "selected");
             const eligibleCandidates = report.candidates.filter((c) => c.outcome === "eligible");
@@ -253,20 +266,14 @@ const plugin = {
               ...eligibleCandidates,
               ...rejectedCandidates,
             ]) {
-              let description: string;
-              if (candidate.reasons.length > 0) {
-                description = candidate.reasons.map((r) => r.message).join("; ");
-              } else if (candidate.outcome === "rejected") {
-                description = `rejected at: ${candidate.stage}`;
-              } else {
-                description = candidate.stage;
-              }
+              const title = candidate.id.startsWith(providerPrefix)
+                ? candidate.id.slice(providerPrefix.length)
+                : candidate.id;
 
               options.push({
                 category: candidate.outcome,
-                title: candidate.id,
-                description,
-                footer: candidate.stage,
+                title,
+                ...(candidate.outcome === "rejected" ? { footer: candidate.stage } : {}),
                 value: candidate.id,
               });
             }
