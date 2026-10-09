@@ -278,30 +278,38 @@ const plugin = {
               });
             }
 
-            const selectedKey = await context.ui.dialog.select({
-              title: `Model alias explanation: ${report.alias}`,
-              placeholder: "Filter candidates...",
-              options,
-            });
-
-            if (selectedKey === undefined) {
-              return;
-            }
-
-            if (selectedKey === "__overview__") {
-              await context.ui.dialog.alert({
+            while (true) {
+              const selectedKey = await context.ui.dialog.select({
                 title: `Model alias explanation: ${report.alias}`,
-                message: formatExplanationOverview(response),
+                placeholder: "Filter candidates...",
+                options,
               });
-              return;
-            }
 
-            const selectedCandidate = report.candidates.find((c) => c.id === selectedKey);
-            if (selectedCandidate) {
-              await context.ui.dialog.alert({
-                title: `Candidate: ${selectedCandidate.id}`,
-                message: formatCandidateDetail(selectedCandidate),
-              });
+              if (selectedKey === undefined) {
+                return;
+              }
+
+              let confirmed: boolean | undefined;
+              if (selectedKey === "__overview__") {
+                confirmed = await context.ui.dialog.confirm({
+                  title: `Model alias explanation: ${report.alias}`,
+                  message: formatExplanationOverview(response),
+                  label: { confirm: "Back to candidates", cancel: "Exit" },
+                });
+              } else {
+                const selectedCandidate = report.candidates.find((c) => c.id === selectedKey);
+                if (selectedCandidate) {
+                  confirmed = await context.ui.dialog.confirm({
+                    title: `Candidate: ${selectedCandidate.id}`,
+                    message: formatCandidateDetail(selectedCandidate),
+                    label: { confirm: "Back to candidates", cancel: "Exit" },
+                  });
+                }
+              }
+
+              if (confirmed !== true) {
+                return;
+              }
             }
           } catch {
             await context.ui.dialog.alert({ title: COMMAND_TITLE, message: ERROR_MESSAGE });

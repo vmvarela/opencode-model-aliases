@@ -50,6 +50,12 @@ interface SelectCall {
   options: SelectOption[];
 }
 
+interface ConfirmCall {
+  title: string;
+  message: string;
+  label?: { confirm?: string; cancel?: string };
+}
+
 interface StrictContextOptions {
   notificationStorage?: Map<string, { aliases: Record<string, string> }>;
   storageFailure?: boolean;
@@ -63,7 +69,8 @@ interface StrictContextOptions {
         options?: { location?: unknown } | undefined,
       ) => Promise<unknown>)
     | undefined;
-  selectReturnValue?: string | undefined;
+  selectReturnValue?: string | undefined | (() => string | undefined);
+  confirmReturnValue?: boolean | undefined | (() => boolean | undefined);
 }
 
 const SAMPLE_ROW_ACTIVE: InspectResponseRow = {
@@ -171,11 +178,13 @@ function createStrictContext(options?: StrictContextOptions) {
   const returnedLayers: KeymapLayer[] = [];
   const activeCommands: KeymapCommand[] = [];
   const alerts: Array<{ title: string; message: string }> = [];
+  const confirms: ConfirmCall[] = [];
   const selectCalls: SelectCall[] = [];
   const inspectCalls: Array<{ input: unknown; options?: unknown }> = [];
 
   const defaultLoc = options?.defaultLocation ?? { directory: "/default/workspace" };
-  let simulatedSelectReturn: string | undefined = options?.selectReturnValue;
+  let simulatedSelectReturn = options?.selectReturnValue;
+  let simulatedConfirmReturn = options?.confirmReturnValue;
 
   let slotDisposed = false;
   let activeAppRender: (() => null) | null = null;
@@ -271,9 +280,18 @@ function createStrictContext(options?: StrictContextOptions) {
     alerts.push(opts);
   });
 
+  const confirmSpy = vi.fn(async (opts: ConfirmCall) => {
+    confirms.push(opts);
+    return typeof simulatedConfirmReturn === "function"
+      ? simulatedConfirmReturn()
+      : simulatedConfirmReturn;
+  });
+
   const selectSpy = vi.fn(async (opts: SelectCall) => {
     selectCalls.push(opts);
-    return simulatedSelectReturn;
+    return typeof simulatedSelectReturn === "function"
+      ? simulatedSelectReturn()
+      : simulatedSelectReturn;
   });
 
   const slotImpl = vi.fn((claim: SlotClaim) => {
@@ -292,11 +310,11 @@ function createStrictContext(options?: StrictContextOptions) {
     slot: slotImpl,
     dialog: {
       alert: alertSpy,
+      confirm: confirmSpy,
       select: selectSpy,
       show: forbiddenProxy("ui.dialog.show"),
       set: forbiddenProxy("ui.dialog.set"),
       clear: forbiddenProxy("ui.dialog.clear"),
-      confirm: forbiddenProxy("ui.dialog.confirm"),
       prompt: forbiddenProxy("ui.dialog.prompt"),
     },
     toast: {
@@ -358,11 +376,16 @@ function createStrictContext(options?: StrictContextOptions) {
     defaultLocationSpy,
     slotImpl,
     alerts,
+    confirms,
+    confirmSpy,
     selectCalls,
     inspectCalls,
     activeCommands,
     returnedLayers,
-    setSelectReturn: (val: string | undefined) => {
+    setConfirmReturn: (val: boolean | undefined | (() => boolean | undefined)) => {
+      simulatedConfirmReturn = val;
+    },
+    setSelectReturn: (val: string | undefined | (() => string | undefined)) => {
       simulatedSelectReturn = val;
     },
     remountSlot: () => {
@@ -718,6 +741,7 @@ describe("TUI security, validation, and error boundaries", () => {
     expect(harness.inspectCalls).toHaveLength(2);
     expect(harness.selectSpy).toHaveBeenCalledTimes(1);
     expect(harness.alertSpy).toHaveBeenCalledTimes(1);
+    expect(harness.confirmSpy).not.toHaveBeenCalled();
   });
 
   it("passes explicit location when context provides location", async () => {
@@ -1247,15 +1271,21 @@ describe("TUI explain action", () => {
     );
     expect(rejectedFiltering?.footer).toBe("filtering");
 
-    // Detail alert preserves full canonical ID and full reason text
-    expect(harness.alerts.at(-1)?.title).toBe("Candidate: opencode/mimo-v2.6-flash-free");
-    expect(harness.alerts.at(-1)?.message).toContain("✗ opencode/mimo-v2.6-flash-free (rejected)");
-    expect(harness.alerts.at(-1)?.message).toContain("Does not satisfy minContext>=256000");
+    // Detail confirm dialog preserves full canonical ID, full reasons, and navigation labels
+    expect(harness.confirms.at(-1)?.title).toBe("Candidate: opencode/mimo-v2.6-flash-free");
+    expect(harness.confirms.at(-1)?.message).toContain(
+      "✗ opencode/mimo-v2.6-flash-free (rejected)",
+    );
+    expect(harness.confirms.at(-1)?.message).toContain("Does not satisfy minContext>=256000");
+    expect(harness.confirms.at(-1)?.label).toEqual({
+      confirm: "Back to candidates",
+      cancel: "Exit",
+    });
 
     await stop?.();
   });
 
-  it("opens candidate detail or overview alert when selected from dialog", async () => {
+  it("opens candidate detail or overview confirm dialog when selected from dialog", async () => {
     const explainHandler = vi.fn(async () => ({
       status: "active",
       explanation: {
@@ -1283,15 +1313,112 @@ describe("TUI explain action", () => {
     const harness = createStrictContext({ explainHandler, selectReturnValue: "p/model" });
     const stop = plugin.setup(harness.context);
     await harness.activeCommands[0]?.run("explain p/alias");
-    expect(harness.alerts.at(-1)?.title).toBe("Candidate: p/model");
-    expect(harness.alerts.at(-1)?.message).toContain("✓ p/model (selected)");
-    expect(harness.alerts.at(-1)?.message).toContain("Newest eligible candidate");
+    expect(harness.confirms.at(-1)?.title).toBe("Candidate: p/model");
+    expect(harness.confirms.at(-1)?.message).toContain("✓ p/model (selected)");
+    expect(harness.confirms.at(-1)?.message).toContain("Newest eligible candidate");
+    expect(harness.confirms.at(-1)?.label).toEqual({
+      confirm: "Back to candidates",
+      cancel: "Exit",
+    });
 
     harness.setSelectReturn("__overview__");
     await harness.activeCommands[0]?.run("explain p/alias");
-    expect(harness.alerts.at(-1)?.title).toBe("Model alias explanation: p/alias");
-    expect(harness.alerts.at(-1)?.message).toContain("matching: 1 → filtering: 1 → selection: 1");
-    expect(harness.alerts.at(-1)?.message).toContain("Winner: p/model");
+    expect(harness.confirms.at(-1)?.title).toBe("Model alias explanation: p/alias");
+    expect(harness.confirms.at(-1)?.message).toContain("matching: 1 → filtering: 1 → selection: 1");
+    expect(harness.confirms.at(-1)?.message).toContain("Winner: p/model");
+    expect(harness.confirms.at(-1)?.label).toEqual({
+      confirm: "Back to candidates",
+      cancel: "Exit",
+    });
+    await stop?.();
+  });
+
+  it("returns to candidate list on Enter/confirm and exits on Escape/cancel", async () => {
+    const explainHandler = vi.fn(async () => ({
+      status: "active",
+      explanation: {
+        alias: "p/alias",
+        strategy: "latest",
+        unmatched: 1,
+        stages: [
+          { name: "matching", accepted: 2 },
+          { name: "filtering", accepted: 2 },
+          { name: "selection", accepted: 1 },
+        ],
+        winner: "p/m1",
+        candidates: [
+          {
+            id: "p/m1",
+            matchedPatterns: ["p/*"],
+            outcome: "selected",
+            stage: "selection",
+            released: 2000,
+            reasons: [{ code: "newest-release", message: "Newest eligible candidate" }],
+          },
+          {
+            id: "p/m2",
+            matchedPatterns: ["p/*"],
+            outcome: "eligible",
+            stage: "selection",
+            released: 1000,
+            reasons: [{ code: "older-release", message: "Older release" }],
+          },
+        ],
+      },
+    }));
+
+    // Sequence:
+    // 1st select: "p/m1" -> confirm returns true (Enter/Back)
+    // 2nd select: "p/m2" -> confirm returns false (Escape/Exit)
+    const selectSequence = ["p/m1", "p/m2"];
+    const confirmSequence = [true, false];
+    const harness = createStrictContext({
+      explainHandler,
+      selectReturnValue: () => selectSequence.shift(),
+      confirmReturnValue: () => confirmSequence.shift(),
+    });
+    const stop = plugin.setup(harness.context);
+
+    await harness.activeCommands[0]?.run("explain p/alias");
+
+    // 2 select calls because 1st confirmed (looped back), and 2nd canceled (exited)
+    expect(harness.selectCalls).toHaveLength(2);
+    expect(harness.confirms).toHaveLength(2);
+    expect(harness.confirms[0]?.title).toBe("Candidate: p/m1");
+    expect(harness.confirms[1]?.title).toBe("Candidate: p/m2");
+
+    await stop?.();
+  });
+
+  it("exits on Escape from initial candidate list without opening confirm", async () => {
+    const explainHandler = vi.fn(async () => ({
+      status: "active",
+      explanation: {
+        alias: "p/alias",
+        strategy: "latest",
+        unmatched: 0,
+        stages: [{ name: "matching", accepted: 1 }],
+        winner: "p/m1",
+        candidates: [
+          {
+            id: "p/m1",
+            matchedPatterns: ["p/*"],
+            outcome: "selected",
+            stage: "selection",
+            reasons: [],
+          },
+        ],
+      },
+    }));
+    const harness = createStrictContext({ explainHandler, selectReturnValue: undefined });
+    const stop = plugin.setup(harness.context);
+
+    await harness.activeCommands[0]?.run("explain p/alias");
+
+    expect(harness.selectCalls).toHaveLength(1);
+    expect(harness.confirms).toHaveLength(0);
+    expect(harness.alerts).toHaveLength(0);
+
     await stop?.();
   });
 
