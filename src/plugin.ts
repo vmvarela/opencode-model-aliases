@@ -1,6 +1,7 @@
 import { type Model, Plugin } from "@opencode/plugin";
 import { isPlainObject, type NormalizedConfig, type Options } from "./config.js";
 import { loadConfigFile } from "./config-file.js";
+import type { ExplainResponse, ResolutionExplanation } from "./explain.js";
 import { createHistory } from "./history.js";
 import { aliasDisplayName } from "./names.js";
 import { normalizeOptions } from "./normalize.js";
@@ -40,7 +41,12 @@ interface FloatingEditor {
  * materialize; the caller only publishes them if the whole replay (including
  * materialization) succeeded.
  */
-function replay(config: NormalizedConfig, editor: FloatingEditor): AliasReportRow[] {
+interface ReplayReport {
+  rows: readonly AliasReportRow[];
+  explanations: ReadonlyMap<string, ResolutionExplanation>;
+}
+
+function replay(config: NormalizedConfig, editor: FloatingEditor): ReplayReport {
   const snapshot = editor.list();
 
   // Configuration collision: the alias id already exists as a source model.
@@ -107,7 +113,10 @@ function replay(config: NormalizedConfig, editor: FloatingEditor): AliasReportRo
     }
   }
 
-  return buildRows(results);
+  return {
+    rows: buildRows(results),
+    explanations: new Map(results.map(({ alias, result }) => [alias.key, result.explanation])),
+  };
 }
 
 export default Plugin.define({
@@ -189,16 +198,15 @@ export default Plugin.define({
     // describable current mapping. It is replaced once per replay, only if
     // the whole replay/materialization succeeded; on any failure it is
     // cleared so partial or stale mappings are never described as current.
-    let reportRows: readonly AliasReportRow[] | null = null;
+    let report: ReplayReport | null = null;
 
     const registration = await ctx.model.transform((hostEditor) => {
       try {
         // Single host→adapter boundary: the host DeepMutable degrades strings
         // with brand; here it is adapted to the clean editor view.
-        const rows = replay(normalized.config, hostEditor as unknown as FloatingEditor);
-        reportRows = rows;
+        report = replay(normalized.config, hostEditor as unknown as FloatingEditor);
       } catch (error) {
-        reportRows = null;
+        report = null;
         if (initializing && !hasInitialError) {
           hasInitialError = true;
           initialError = error;
@@ -242,10 +250,11 @@ export default Plugin.define({
         // one; unavailability text and empty rows.
         return { text: UNAVAILABLE_REPORT, rows: [] };
       }
-      const snapshot = reportRows;
-      if (snapshot === null) {
+      const current = report;
+      if (current === null) {
         return { text: UNAVAILABLE_REPORT, rows: [] };
       }
+      const snapshot = current.rows;
       // Final visibility by primitives: an alias disabled by a later
       // policy is not labeled active; a retired alias keeps the existing
       // behavior (inactive).
@@ -269,17 +278,57 @@ export default Plugin.define({
         }
       }
       const rows = await history.observe(snapshot, visible);
+      // Storage is asynchronous: a host replay may supersede this decision while
+      // history is being saved. Never present that old mapping as current.
+      if (report !== current) return { text: UNAVAILABLE_REPORT, rows: [] };
       return {
         text: formatReport(rows, visible),
         rows: buildInspectRows(rows, visible),
+        report: current,
+        visible,
       };
     };
     let pending = Promise.resolve();
     let stopped = false;
     const inspect = () => {
-      const result = pending.then(() =>
-        stopped ? { text: UNAVAILABLE_REPORT, rows: [] } : readInspection(),
+      const result = pending.then(async () => {
+        const response = stopped ? { text: UNAVAILABLE_REPORT, rows: [] } : await readInspection();
+        return { text: response.text, rows: response.rows };
+      });
+      pending = result.then(
+        () => {},
+        () => {},
       );
+      return result;
+    };
+    const explain = (input: unknown): Promise<ExplainResponse> => {
+      if (
+        !isPlainObject(input) ||
+        typeof input.alias !== "string" ||
+        input.alias.length === 0 ||
+        Object.keys(input).some((key) => key !== "alias")
+      ) {
+        return Promise.reject(new Error("Expected { alias: <provider/alias> }"));
+      }
+      const alias = input.alias;
+      const result = pending.then(async (): Promise<ExplainResponse> => {
+        if (stopped) return { status: "unavailable" };
+        if (!normalized.config.aliases.some((entry) => entry.key === alias))
+          return { status: "unknown-alias" };
+        const inspection = await readInspection();
+        const explanation = inspection.report?.explanations.get(alias);
+        // Escaped display keys are not identities: different raw keys can render
+        // identically (for example a newline and a literal "\\u000a").
+        const row = inspection.report?.rows.find((entry) => entry.key === alias);
+        if (!explanation || !row) return { status: "unavailable" };
+        const status =
+          row.status === "unresolved"
+            ? "unresolved"
+            : inspection.visible?.has(alias)
+              ? "active"
+              : "inactive";
+        return { status, explanation: structuredClone(explanation) };
+      });
       pending = result.then(
         () => {},
         () => {},
@@ -288,7 +337,7 @@ export default Plugin.define({
     };
     let rpcRegistration: { dispose: () => Promise<void> };
     try {
-      rpcRegistration = await ctx.rpc.register(ModelAliasesRpc, { inspect });
+      rpcRegistration = await ctx.rpc.register(ModelAliasesRpc, { inspect, explain });
     } catch (error) {
       await registration.dispose();
       throw error;

@@ -1,4 +1,11 @@
 import type { Plugin } from "@opencode/plugin/tui";
+import {
+  type CandidateExplanation,
+  formatCandidateDetail,
+  formatExplanation,
+  formatExplanationOverview,
+  isExplainResponse,
+} from "./explain.js";
 import type { InspectReportRow } from "./report.js";
 import { ModelAliasesRpc } from "./rpc.js";
 import { type AliasTransition, isAliasTransition } from "./transition.js";
@@ -8,7 +15,7 @@ const COMMAND_TITLE = "Model aliases";
 const SLASH_COMMAND_NAME = "model-aliases";
 
 const USAGE_MESSAGE =
-  "Unexpected arguments. Use /model-aliases without arguments to view configured model aliases.";
+  'Unexpected arguments. Use /model-aliases or /model-aliases explain <provider/alias>. Quote the alias if it contains spaces: /model-aliases explain "<provider/alias>".';
 const ERROR_MESSAGE = "Unable to load model aliases. Please reload or try again.";
 
 export type InspectResponseRow = InspectReportRow;
@@ -193,7 +200,140 @@ const plugin = {
         arguments: true as const,
       },
       run: async (input?: string) => {
-        if (input !== undefined && input.trim() !== "") {
+        const args = input?.trim() ?? "";
+        // Alias keys may contain spaces; a quoted argument preserves the exact
+        // key, while the unquoted form keeps the historical single-token shape.
+        const explainMatch = /^explain\s+("([^"]*)"|(\S+))$/.exec(args);
+        const quoted = explainMatch?.[2];
+        const alias = quoted !== undefined ? quoted : explainMatch?.[3];
+        if (explainMatch && alias !== undefined && alias.length > 0) {
+          const location = context.location ?? context.data.location.default();
+          try {
+            const response = await context.client
+              .rpc(ModelAliasesRpc)
+              .explain({ alias }, { location });
+            if (!isExplainResponse(response)) {
+              await context.ui.dialog.alert({ title: COMMAND_TITLE, message: ERROR_MESSAGE });
+              return;
+            }
+            if (response.status === "unknown-alias" || response.status === "unavailable") {
+              await context.ui.dialog.alert({
+                title: "Model alias explanation",
+                message: formatExplanation(response),
+              });
+              return;
+            }
+
+            const report = response.explanation;
+            if (report.candidates.length === 0) {
+              await context.ui.dialog.alert({
+                title: "Model alias explanation",
+                message: formatExplanation(response),
+              });
+              return;
+            }
+
+            const compactStage = (name: string) => {
+              if (name === "matching") return "match";
+              if (name === "filtering") return "filter";
+              if (name === "selection") return "select";
+              return name;
+            };
+
+            const options: Array<{
+              category?: string;
+              title: string;
+              description?: string;
+              footer?: string;
+              value: string;
+            }> = [
+              {
+                category: "overview",
+                title: "Overview",
+                description: report.stages
+                  .map((s) => `${compactStage(s.name)}: ${s.accepted}`)
+                  .join(" → "),
+                footer: response.status,
+                value: "__overview__",
+              },
+            ];
+
+            const providerPrefix = report.alias.includes("/")
+              ? `${report.alias.split("/")[0]}/`
+              : "";
+
+            const selectedCandidates = report.candidates.filter((c) => c.outcome === "selected");
+            const eligibleCandidates = report.candidates.filter((c) => c.outcome === "eligible");
+            const rejectedCandidates = report.candidates.filter((c) => c.outcome === "rejected");
+
+            // Explanation IDs are escaped display text, not identities: two raw
+            // IDs can escape to the same string (a newline vs a literal
+            // "\\u000a"). Selection values index the candidates losslessly.
+            const valueOfCandidate = (candidate: CandidateExplanation) =>
+              `__candidate_${report.candidates.indexOf(candidate)}`;
+            const candidateByValue = new Map<string, CandidateExplanation>(
+              report.candidates.map((candidate) => [valueOfCandidate(candidate), candidate]),
+            );
+
+            for (const candidate of [
+              ...selectedCandidates,
+              ...eligibleCandidates,
+              ...rejectedCandidates,
+            ]) {
+              const title = candidate.id.startsWith(providerPrefix)
+                ? candidate.id.slice(providerPrefix.length)
+                : candidate.id;
+
+              options.push({
+                category: candidate.outcome,
+                title,
+                ...(candidate.outcome === "rejected" ? { footer: candidate.stage } : {}),
+                value: valueOfCandidate(candidate),
+              });
+            }
+
+            let current: string | undefined;
+            while (true) {
+              const selectedKey = await context.ui.dialog.select({
+                title: `Model alias explanation: ${report.alias}`,
+                placeholder: "Filter candidates...",
+                options,
+                ...(current === undefined ? {} : { current }),
+              });
+
+              if (selectedKey === undefined) {
+                return;
+              }
+              current = selectedKey;
+
+              let confirmed: boolean | undefined;
+              if (selectedKey === "__overview__") {
+                confirmed = await context.ui.dialog.confirm({
+                  title: `Model alias explanation: ${report.alias}`,
+                  message: formatExplanationOverview(response),
+                  label: { confirm: "Back to candidates", cancel: "Exit" },
+                });
+              } else {
+                const selectedCandidate = candidateByValue.get(selectedKey);
+                if (selectedCandidate) {
+                  confirmed = await context.ui.dialog.confirm({
+                    title: `Candidate: ${selectedCandidate.id}`,
+                    message: formatCandidateDetail(selectedCandidate),
+                    label: { confirm: "Back to candidates", cancel: "Exit" },
+                  });
+                }
+              }
+
+              if (confirmed !== true) {
+                return;
+              }
+            }
+          } catch {
+            await context.ui.dialog.alert({ title: COMMAND_TITLE, message: ERROR_MESSAGE });
+          }
+          return;
+        }
+        if (args !== "") {
           await context.ui.dialog.alert({
             title: COMMAND_TITLE,
             message: USAGE_MESSAGE,

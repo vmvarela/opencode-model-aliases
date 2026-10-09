@@ -48,6 +48,13 @@ interface SelectCall {
   title: string;
   placeholder?: string;
   options: SelectOption[];
+  current?: string;
+}
+
+interface ConfirmCall {
+  title: string;
+  message: string;
+  label?: { confirm?: string; cancel?: string };
 }
 
 interface StrictContextOptions {
@@ -56,13 +63,15 @@ interface StrictContextOptions {
   saveNotification?: () => Promise<void>;
   location?: { directory: string } | undefined;
   defaultLocation?: { directory: string } | undefined;
+  explainHandler?: (input: unknown, options?: { location?: unknown }) => Promise<unknown>;
   inspectHandler?:
     | ((
         input: Record<string, never>,
         options?: { location?: unknown } | undefined,
       ) => Promise<unknown>)
     | undefined;
-  selectReturnValue?: string | undefined;
+  selectReturnValue?: string | undefined | (() => string | undefined);
+  confirmReturnValue?: boolean | undefined | (() => boolean | undefined);
 }
 
 const SAMPLE_ROW_ACTIVE: InspectResponseRow = {
@@ -170,11 +179,13 @@ function createStrictContext(options?: StrictContextOptions) {
   const returnedLayers: KeymapLayer[] = [];
   const activeCommands: KeymapCommand[] = [];
   const alerts: Array<{ title: string; message: string }> = [];
+  const confirms: ConfirmCall[] = [];
   const selectCalls: SelectCall[] = [];
   const inspectCalls: Array<{ input: unknown; options?: unknown }> = [];
 
   const defaultLoc = options?.defaultLocation ?? { directory: "/default/workspace" };
-  let simulatedSelectReturn: string | undefined = options?.selectReturnValue;
+  let simulatedSelectReturn = options?.selectReturnValue;
+  let simulatedConfirmReturn = options?.confirmReturnValue;
 
   let slotDisposed = false;
   let activeAppRender: (() => null) | null = null;
@@ -221,6 +232,9 @@ function createStrictContext(options?: StrictContextOptions) {
     rpc: vi.fn((definition: unknown) => {
       expect(definition).toBe(ModelAliasesRpc);
       return {
+        explain: vi.fn(async (input: unknown, rpcOptions?: { location?: unknown }) => {
+          return options?.explainHandler?.(input, rpcOptions) ?? { status: "unknown-alias" };
+        }),
         inspect: vi.fn(
           async (input: Record<string, never>, rpcOptions?: { location?: unknown }) => {
             inspectCalls.push({ input, options: rpcOptions });
@@ -267,9 +281,18 @@ function createStrictContext(options?: StrictContextOptions) {
     alerts.push(opts);
   });
 
+  const confirmSpy = vi.fn(async (opts: ConfirmCall) => {
+    confirms.push(opts);
+    return typeof simulatedConfirmReturn === "function"
+      ? simulatedConfirmReturn()
+      : simulatedConfirmReturn;
+  });
+
   const selectSpy = vi.fn(async (opts: SelectCall) => {
     selectCalls.push(opts);
-    return simulatedSelectReturn;
+    return typeof simulatedSelectReturn === "function"
+      ? simulatedSelectReturn()
+      : simulatedSelectReturn;
   });
 
   const slotImpl = vi.fn((claim: SlotClaim) => {
@@ -288,11 +311,11 @@ function createStrictContext(options?: StrictContextOptions) {
     slot: slotImpl,
     dialog: {
       alert: alertSpy,
+      confirm: confirmSpy,
       select: selectSpy,
       show: forbiddenProxy("ui.dialog.show"),
       set: forbiddenProxy("ui.dialog.set"),
       clear: forbiddenProxy("ui.dialog.clear"),
-      confirm: forbiddenProxy("ui.dialog.confirm"),
       prompt: forbiddenProxy("ui.dialog.prompt"),
     },
     toast: {
@@ -354,11 +377,16 @@ function createStrictContext(options?: StrictContextOptions) {
     defaultLocationSpy,
     slotImpl,
     alerts,
+    confirms,
+    confirmSpy,
     selectCalls,
     inspectCalls,
     activeCommands,
     returnedLayers,
-    setSelectReturn: (val: string | undefined) => {
+    setConfirmReturn: (val: boolean | undefined | (() => boolean | undefined)) => {
+      simulatedConfirmReturn = val;
+    },
+    setSelectReturn: (val: string | undefined | (() => string | undefined)) => {
       simulatedSelectReturn = val;
     },
     remountSlot: () => {
@@ -714,6 +742,7 @@ describe("TUI security, validation, and error boundaries", () => {
     expect(harness.inspectCalls).toHaveLength(2);
     expect(harness.selectSpy).toHaveBeenCalledTimes(1);
     expect(harness.alertSpy).toHaveBeenCalledTimes(1);
+    expect(harness.confirmSpy).not.toHaveBeenCalled();
   });
 
   it("passes explicit location when context provides location", async () => {
@@ -1059,5 +1088,514 @@ describe("TUI change notifications", () => {
     expect(failure.toasts).toHaveLength(0);
     expect(failure.selectSpy).toHaveBeenCalledTimes(1);
     expect(failure.alerts).toHaveLength(0);
+  });
+});
+
+describe("TUI explain action", () => {
+  it("renders interactive dialog.select with overview and candidates grouped by outcome", async () => {
+    const explainHandler = vi.fn(async () => ({
+      status: "active",
+      explanation: {
+        alias: "p/alias",
+        strategy: "latest",
+        unmatched: 3,
+        stages: [
+          { name: "matching", accepted: 2 },
+          { name: "filtering", accepted: 2 },
+          { name: "selection", accepted: 1 },
+        ],
+        winner: "p/winner",
+        candidates: [
+          {
+            id: "p/winner",
+            matchedPatterns: ["p/*"],
+            outcome: "selected",
+            stage: "selection",
+            released: 2000,
+            reasons: [{ code: "newest-release", message: "Newest eligible candidate" }],
+          },
+          {
+            id: "p/older",
+            matchedPatterns: ["p/*"],
+            outcome: "eligible",
+            stage: "selection",
+            released: 1000,
+            reasons: [
+              { code: "older-release", message: "Older release than the selected candidate" },
+            ],
+          },
+          {
+            id: "p/rejected",
+            matchedPatterns: ["p/*"],
+            outcome: "rejected",
+            stage: "filtering",
+            reasons: [{ code: "requirement-not-met", message: "Does not satisfy minContext>=100" }],
+          },
+        ],
+      },
+    }));
+    const location = { directory: "/project" };
+    const harness = createStrictContext({ explainHandler, location });
+    const stop = plugin.setup(harness.context);
+    await harness.activeCommands[0]?.run(" explain p/alias ");
+    expect(explainHandler).toHaveBeenCalledWith({ alias: "p/alias" }, { location });
+    expect(harness.selectCalls).toHaveLength(1);
+    const call = harness.selectCalls[0];
+    expect(call?.title).toBe("Model alias explanation: p/alias");
+    expect(call?.placeholder).toBe("Filter candidates...");
+    expect(call?.options).toEqual([
+      {
+        category: "overview",
+        title: "Overview",
+        description: "match: 2 → filter: 2 → select: 1",
+        footer: "active",
+        value: "__overview__",
+      },
+      {
+        category: "selected",
+        title: "winner",
+        footer: undefined,
+        value: "__candidate_0",
+      },
+      {
+        category: "eligible",
+        title: "older",
+        footer: undefined,
+        value: "__candidate_1",
+      },
+      {
+        category: "rejected",
+        title: "rejected",
+        footer: "filtering",
+        value: "__candidate_2",
+      },
+    ]);
+    expect(harness.alerts).toHaveLength(0);
+    await stop?.();
+  });
+
+  it("enforces narrow-row information policy for small terminals", async () => {
+    const explainHandler = vi.fn(async () => ({
+      status: "active",
+      explanation: {
+        alias: "opencode/zen-plan",
+        strategy: "latest",
+        unmatched: 3,
+        stages: [
+          { name: "matching", accepted: 9 },
+          { name: "filtering", accepted: 9 },
+          { name: "selection", accepted: 1 },
+        ],
+        winner: "opencode/longcat-2.5-preview-free",
+        candidates: [
+          {
+            id: "opencode/longcat-2.5-preview-free",
+            matchedPatterns: ["opencode/*-free"],
+            outcome: "selected",
+            stage: "selection",
+            released: 1700000000000,
+            reasons: [
+              {
+                code: "newest-release",
+                message: "Newest eligible candidate with a reliable release timestamp",
+              },
+            ],
+          },
+          {
+            id: "opencode/muse-spark-1.3-contributor-free",
+            matchedPatterns: ["opencode/*-free"],
+            outcome: "eligible",
+            stage: "selection",
+            released: 1600000000000,
+            reasons: [
+              { code: "older-release", message: "Older release than the selected candidate" },
+            ],
+          },
+          {
+            id: "opencode/exo-free",
+            matchedPatterns: ["opencode/*-free"],
+            outcome: "rejected",
+            stage: "matching",
+            reasons: [{ code: "excluded-pattern", message: "Excluded by opencode/exo-*" }],
+          },
+          {
+            id: "opencode/mimo-v2.6-flash-free",
+            matchedPatterns: ["opencode/*-free"],
+            outcome: "rejected",
+            stage: "filtering",
+            reasons: [
+              { code: "requirement-not-met", message: "Does not satisfy minContext>=256000" },
+            ],
+          },
+        ],
+      },
+    }));
+    const harness = createStrictContext({
+      explainHandler,
+      selectReturnValue: "__candidate_3",
+    });
+    const stop = plugin.setup(harness.context);
+    await harness.activeCommands[0]?.run("explain opencode/zen-plan");
+    expect(harness.selectCalls).toHaveLength(1);
+    const call = harness.selectCalls[0];
+
+    // Overview: compact title and stage names, preserves status footer
+    const overview = call?.options.find((o) => o.value === "__overview__");
+    expect(overview?.title).toBe("Overview");
+    expect(overview?.description).toBe("match: 9 → filter: 9 → select: 1");
+    expect(overview?.footer).toBe("active");
+
+    // Candidates: strip provider prefix for compact title
+    expect(call?.options.map((o) => o.title)).toEqual([
+      "Overview",
+      "longcat-2.5-preview-free",
+      "muse-spark-1.3-contributor-free",
+      "exo-free",
+      "mimo-v2.6-flash-free",
+    ]);
+
+    // Candidates: no reason descriptions in rows to avoid horizontal clipping
+    const candidateOptions = call?.options.filter((o) => o.value !== "__overview__");
+    expect(candidateOptions?.every((o) => o.description === undefined)).toBe(true);
+
+    // Candidates: non-rejected rows omit footers; rejected rows show only stage
+    const selectedOpt = call?.options.find((o) => o.value === "__candidate_0");
+    expect(selectedOpt?.footer).toBeUndefined();
+    const eligibleOpt = call?.options.find((o) => o.value === "__candidate_1");
+    expect(eligibleOpt?.footer).toBeUndefined();
+    const rejectedMatching = call?.options.find((o) => o.value === "__candidate_2");
+    expect(rejectedMatching?.footer).toBe("matching");
+    const rejectedFiltering = call?.options.find((o) => o.value === "__candidate_3");
+    expect(rejectedFiltering?.footer).toBe("filtering");
+
+    // Detail confirm dialog preserves full canonical ID, full reasons, and navigation labels
+    expect(harness.confirms.at(-1)?.title).toBe("Candidate: opencode/mimo-v2.6-flash-free");
+    expect(harness.confirms.at(-1)?.message).toContain(
+      "✗ opencode/mimo-v2.6-flash-free (rejected)",
+    );
+    expect(harness.confirms.at(-1)?.message).toContain("Does not satisfy minContext>=256000");
+    expect(harness.confirms.at(-1)?.label).toEqual({
+      confirm: "Back to candidates",
+      cancel: "Exit",
+    });
+
+    await stop?.();
+  });
+
+  it("opens candidate detail or overview confirm dialog when selected from dialog", async () => {
+    const explainHandler = vi.fn(async () => ({
+      status: "active",
+      explanation: {
+        alias: "p/alias",
+        strategy: "latest",
+        unmatched: 3,
+        stages: [
+          { name: "matching", accepted: 1 },
+          { name: "filtering", accepted: 1 },
+          { name: "selection", accepted: 1 },
+        ],
+        winner: "p/model",
+        candidates: [
+          {
+            id: "p/model",
+            matchedPatterns: ["p/*"],
+            outcome: "selected",
+            stage: "selection",
+            released: 1000,
+            reasons: [{ code: "newest-release", message: "Newest eligible candidate" }],
+          },
+        ],
+      },
+    }));
+    const harness = createStrictContext({ explainHandler, selectReturnValue: "__candidate_0" });
+    const stop = plugin.setup(harness.context);
+    await harness.activeCommands[0]?.run("explain p/alias");
+    expect(harness.confirms.at(-1)?.title).toBe("Candidate: p/model");
+    expect(harness.confirms.at(-1)?.message).toContain("✓ p/model (selected)");
+    expect(harness.confirms.at(-1)?.message).toContain("Newest eligible candidate");
+    expect(harness.confirms.at(-1)?.label).toEqual({
+      confirm: "Back to candidates",
+      cancel: "Exit",
+    });
+
+    harness.setSelectReturn("__overview__");
+    await harness.activeCommands[0]?.run("explain p/alias");
+    expect(harness.confirms.at(-1)?.title).toBe("Model alias explanation: p/alias");
+    expect(harness.confirms.at(-1)?.message).toContain("matching: 1 → filtering: 1 → selection: 1");
+    expect(harness.confirms.at(-1)?.message).toContain("Winner: p/model");
+    expect(harness.confirms.at(-1)?.label).toEqual({
+      confirm: "Back to candidates",
+      cancel: "Exit",
+    });
+    await stop?.();
+  });
+
+  it("returns to candidate list on Enter/confirm and exits on Escape/cancel", async () => {
+    const explainHandler = vi.fn(async () => ({
+      status: "active",
+      explanation: {
+        alias: "p/alias",
+        strategy: "latest",
+        unmatched: 1,
+        stages: [
+          { name: "matching", accepted: 2 },
+          { name: "filtering", accepted: 2 },
+          { name: "selection", accepted: 1 },
+        ],
+        winner: "p/m1",
+        candidates: [
+          {
+            id: "p/m1",
+            matchedPatterns: ["p/*"],
+            outcome: "selected",
+            stage: "selection",
+            released: 2000,
+            reasons: [{ code: "newest-release", message: "Newest eligible candidate" }],
+          },
+          {
+            id: "p/m2",
+            matchedPatterns: ["p/*"],
+            outcome: "eligible",
+            stage: "selection",
+            released: 1000,
+            reasons: [{ code: "older-release", message: "Older release" }],
+          },
+        ],
+      },
+    }));
+
+    // Sequence:
+    // 1st select: "p/m1" -> confirm returns true (Enter/Back)
+    // 2nd select: "p/m2" -> confirm returns false (Escape/Exit)
+    const selectSequence = ["__candidate_0", "__candidate_1"];
+    const confirmSequence = [true, false];
+    const harness = createStrictContext({
+      explainHandler,
+      selectReturnValue: () => selectSequence.shift(),
+      confirmReturnValue: () => confirmSequence.shift(),
+    });
+    const stop = plugin.setup(harness.context);
+
+    await harness.activeCommands[0]?.run("explain p/alias");
+
+    // 2 select calls because 1st confirmed (looped back), and 2nd canceled (exited)
+    expect(harness.selectCalls).toHaveLength(2);
+    expect(harness.confirms).toHaveLength(2);
+    expect(harness.confirms[0]?.title).toBe("Candidate: p/m1");
+    expect(harness.confirms[1]?.title).toBe("Candidate: p/m2");
+
+    await stop?.();
+  });
+
+  it("supports quoted alias names containing spaces and preserves the exact key", async () => {
+    const explainHandler = vi.fn(async (): Promise<unknown> => ({ status: "unknown-alias" }));
+    const location = { directory: "/project" };
+    const harness = createStrictContext({ explainHandler, location });
+    const stop = plugin.setup(harness.context);
+
+    await harness.activeCommands[0]?.run('explain "p/my alias"');
+    expect(explainHandler).toHaveBeenCalledWith({ alias: "p/my alias" }, { location });
+
+    explainHandler.mockClear();
+    await harness.activeCommands[0]?.run('explain "p/inner  spaces"');
+    expect(explainHandler).toHaveBeenCalledWith({ alias: "p/inner  spaces" }, { location });
+
+    // Unquoted arguments keep the historical single-token form, and a bare
+    // empty quote is still a usage error.
+    explainHandler.mockClear();
+    await harness.activeCommands[0]?.run("explain p/alias");
+    expect(explainHandler).toHaveBeenCalledWith({ alias: "p/alias" }, { location });
+    explainHandler.mockClear();
+    await harness.activeCommands[0]?.run('explain ""');
+    expect(explainHandler).not.toHaveBeenCalled();
+    expect(harness.alerts.at(-1)?.message).toMatch(/unexpected arguments/i);
+
+    await stop?.();
+  });
+
+  it("maps colliding escaped candidate IDs to distinct lossless selection values", async () => {
+    // Both raw IDs ("p/m-" + newline and a literal backslash-u000a) escape to
+    // the same sanitized display ID, which is all the RPC can deliver.
+    const escapedID = "p/m-\\u000a";
+    const explainHandler = vi.fn(async () => ({
+      status: "active",
+      explanation: {
+        alias: "p/alias",
+        strategy: "latest",
+        unmatched: 0,
+        stages: [
+          { name: "matching", accepted: 2 },
+          { name: "filtering", accepted: 2 },
+          { name: "selection", accepted: 1 },
+        ],
+        winner: escapedID,
+        candidates: [
+          {
+            id: escapedID,
+            matchedPatterns: ["p/*"],
+            outcome: "eligible",
+            stage: "selection",
+            released: 1000,
+            reasons: [{ code: "older-release", message: "Older release (newline raw ID)" }],
+          },
+          {
+            id: escapedID,
+            matchedPatterns: ["p/*"],
+            outcome: "selected",
+            stage: "selection",
+            released: 2000,
+            reasons: [{ code: "newest-release", message: "Newest eligible candidate" }],
+          },
+        ],
+      },
+    }));
+    const location = { directory: "/project" };
+    const harness = createStrictContext({
+      explainHandler,
+      location,
+      // Simulate selecting the second (selected-outcome) candidate.
+      selectReturnValue: () =>
+        harness.selectCalls[0]?.options.find((o) => o.category === "selected")?.value,
+    });
+    const stop = plugin.setup(harness.context);
+    await harness.activeCommands[0]?.run("explain p/alias");
+
+    const values = harness.selectCalls[0]?.options.map((o) => o.value) ?? [];
+    expect(new Set(values).size).toBe(values.length);
+    expect(values[1]).not.toBe(values[2]);
+
+    // The selected candidate is the selected-outcome one, not the first match
+    // of the shared display ID.
+    expect(harness.confirms.at(-1)?.title).toBe(`Candidate: ${escapedID}`);
+    expect(harness.confirms.at(-1)?.message).toContain("✓ p/m-\\u000a (selected)");
+    expect(harness.confirms.at(-1)?.message).toContain("Newest eligible candidate");
+    expect(harness.confirms.at(-1)?.message).not.toContain("Older release (newline raw ID)");
+
+    await stop?.();
+  });
+
+  it("passes the confirmed selection as current when the selector repeats", async () => {
+    const explainHandler = vi.fn(async () => ({
+      status: "active",
+      explanation: {
+        alias: "p/alias",
+        strategy: "latest",
+        unmatched: 0,
+        stages: [
+          { name: "matching", accepted: 2 },
+          { name: "filtering", accepted: 2 },
+          { name: "selection", accepted: 1 },
+        ],
+        winner: "p/m1",
+        candidates: [
+          {
+            id: "p/m1",
+            matchedPatterns: ["p/*"],
+            outcome: "selected",
+            stage: "selection",
+            released: 2000,
+            reasons: [{ code: "newest-release", message: "Newest eligible candidate" }],
+          },
+          {
+            id: "p/m2",
+            matchedPatterns: ["p/*"],
+            outcome: "eligible",
+            stage: "selection",
+            released: 1000,
+            reasons: [{ code: "older-release", message: "Older release" }],
+          },
+        ],
+      },
+    }));
+    const selectSequence = ["__candidate_0", undefined];
+    const harness = createStrictContext({
+      explainHandler,
+      confirmReturnValue: true,
+      selectReturnValue: () => selectSequence.shift(),
+    });
+    const stop = plugin.setup(harness.context);
+
+    await harness.activeCommands[0]?.run("explain p/alias");
+
+    expect(harness.selectCalls).toHaveLength(2);
+    expect(harness.selectCalls[0]?.current).toBeUndefined();
+    expect(harness.selectCalls[1]?.current).toBe("__candidate_0");
+    expect(harness.confirms).toHaveLength(1);
+
+    await stop?.();
+  });
+
+  it("exits on Escape from initial candidate list without opening confirm", async () => {
+    const explainHandler = vi.fn(async () => ({
+      status: "active",
+      explanation: {
+        alias: "p/alias",
+        strategy: "latest",
+        unmatched: 0,
+        stages: [{ name: "matching", accepted: 1 }],
+        winner: "p/m1",
+        candidates: [
+          {
+            id: "p/m1",
+            matchedPatterns: ["p/*"],
+            outcome: "selected",
+            stage: "selection",
+            reasons: [],
+          },
+        ],
+      },
+    }));
+    const harness = createStrictContext({ explainHandler, selectReturnValue: undefined });
+    const stop = plugin.setup(harness.context);
+
+    await harness.activeCommands[0]?.run("explain p/alias");
+
+    expect(harness.selectCalls).toHaveLength(1);
+    expect(harness.confirms).toHaveLength(0);
+    expect(harness.alerts).toHaveLength(0);
+
+    await stop?.();
+  });
+
+  it("renders short alert directly when candidate list is empty", async () => {
+    const explainHandler = vi.fn(async () => ({
+      status: "unresolved",
+      explanation: {
+        alias: "p/alias",
+        strategy: "latest",
+        unmatched: 0,
+        stages: [{ name: "matching", accepted: 0 }],
+        failure: { stage: "matching", code: "no-candidates", message: "no candidate matched" },
+        candidates: [],
+      },
+    }));
+    const harness = createStrictContext({ explainHandler });
+    const stop = plugin.setup(harness.context);
+    await harness.activeCommands[0]?.run("explain p/alias");
+    expect(harness.selectCalls).toHaveLength(0);
+    expect(harness.alerts.at(-1)?.title).toBe("Model alias explanation");
+    expect(harness.alerts.at(-1)?.message).toContain("Failed at matching: no candidate matched");
+    await stop?.();
+  });
+
+  it("rejects invalid syntax locally and handles unknown, unavailable, malformed and failed RPC", async () => {
+    const explainHandler = vi.fn(async (): Promise<unknown> => ({ status: "unknown-alias" }));
+    const harness = createStrictContext({ explainHandler });
+    const stop = plugin.setup(harness.context);
+    for (const input of ["explain", "explain p/a extra", "reload"])
+      await harness.activeCommands[0]?.run(input);
+    expect(explainHandler).not.toHaveBeenCalled();
+    await harness.activeCommands[0]?.run("explain p/a");
+    expect(harness.alerts.at(-1)?.message).toContain("Unknown alias");
+    explainHandler.mockResolvedValueOnce({ status: "unavailable" });
+    await harness.activeCommands[0]?.run("explain p/a");
+    expect(harness.alerts.at(-1)?.message).toContain("unavailable");
+    explainHandler.mockResolvedValueOnce({ status: "active", explanation: {} });
+    await harness.activeCommands[0]?.run("explain p/a");
+    expect(harness.alerts.at(-1)?.message).toContain("Unable to load");
+    explainHandler.mockRejectedValueOnce(new Error("PRIVATE"));
+    await harness.activeCommands[0]?.run("explain p/a");
+    expect(harness.alerts.at(-1)?.message).not.toContain("PRIVATE");
+    await stop?.();
   });
 });

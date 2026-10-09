@@ -547,6 +547,47 @@ async function main() {
         }
       }
 
+      // Explain the same packed product through the real host's RPC boundary.
+      const explained = await runSpawn(
+        "opencode",
+        [
+          "api",
+          "--standalone",
+          "post",
+          "/api/rpc/opencode-model-aliases/explain",
+          "--data",
+          JSON.stringify({ input: { alias: ALIAS_KEY } }),
+        ],
+        { cwd: project, env, timeoutMs: CLI_TIMEOUT_MS },
+      );
+      let explanation;
+      try {
+        explanation = JSON.parse(explained.stdout).output;
+      } catch {}
+      const selected = explanation?.explanation?.candidates?.filter(
+        (candidate) => candidate.outcome === "selected",
+      );
+      if (
+        explained.code !== 0 ||
+        explained.timedOut ||
+        explained.spawnError ||
+        explanation?.status !== "active" ||
+        explanation?.explanation?.winner !== `${PROVIDER}/${TARGET}` ||
+        selected?.length !== 1 ||
+        selected[0]?.id !== `${PROVIDER}/${TARGET}` ||
+        selected[0]?.reasons?.[0]?.code !== "newest-release"
+      ) {
+        problems.push(
+          `explain RPC did not describe the actual latest winner (exit=${explained.code}): ${explained.stdout.slice(0, 3000)} ${explained.stderr
+            .split("\n")
+            .filter((line) => /error|invalid|Error/.test(line))
+            .slice(0, 5)
+            .join("\n")}`,
+        );
+      }
+      if (JSON.stringify(explanation ?? {}).includes(DUMMY_KEY))
+        problems.push("explain RPC exposed provider credentials");
+
       if (problems.length === 0) {
         const baseline = reportRows.find((row) => row.key === ALIAS_KEY);
         if (baseline.transition !== undefined)

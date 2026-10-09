@@ -637,3 +637,134 @@ describe("opencode-model-aliases plugin: escape de caracteres de control", () =>
     expect(message).toContain("match is required");
   });
 });
+
+describe("explain RPC", () => {
+  it("returns the materialized decision, refreshes it, and never expands inspect", async () => {
+    const harness = createHarness({ sources: DEFAULT_SOURCES(), options: SIMPLE_OPTIONS() });
+    const stop = await floatingModels.setup(harness.ctx);
+    const explain = harness.rpc.handlers[0]?.explain;
+    if (!explain) throw new Error("missing explain handler");
+    const first = await explain({ alias: "github-copilot/sonnet" }, {});
+    expect(first).toMatchObject({
+      status: "active",
+      explanation: { winner: "github-copilot/sonnet-4" },
+    });
+    expect(Object.keys((await harness.rpc.handlers[0]?.inspect?.({}, {})) as object)).toEqual([
+      "text",
+      "rows",
+    ]);
+    harness.addSource(
+      sourceModel({ id: "sonnet-5", providerID: "github-copilot", released: 9999 }),
+    );
+    const next = await explain({ alias: "github-copilot/sonnet" }, {});
+    expect(next).toMatchObject({
+      status: "active",
+      explanation: { winner: "github-copilot/sonnet-5" },
+    });
+    expect(harness.view().get("github-copilot/sonnet")?.modelID).toBe("sonnet-5");
+    expect(await explain({ alias: "github-copilot/unknown" }, {})).toEqual({
+      status: "unknown-alias",
+    });
+    await expect(explain({ alias: 1 }, {})).rejects.toThrow("Expected");
+    await stop?.();
+    expect(await explain({ alias: "github-copilot/sonnet" }, {})).toEqual({
+      status: "unavailable",
+    });
+  });
+
+  it("explains unresolved aliases and refuses stale or conflicting mappings", async () => {
+    const harness = createHarness({ sources: DEFAULT_SOURCES(), options: SIMPLE_OPTIONS() });
+    const stop = await floatingModels.setup(harness.ctx);
+    const explain = harness.rpc.handlers[0]?.explain;
+    if (!explain) throw new Error("missing explain handler");
+    harness.failNextList(new Error("PRIVATE"));
+    expect(await explain({ alias: "github-copilot/sonnet" }, {})).toEqual({
+      status: "unavailable",
+    });
+    const later = await harness.ctx.model.transform((editor) => {
+      editor.update("github-copilot", "sonnet", (model) => {
+        model.enabled = false;
+      });
+    });
+    expect(await explain({ alias: "github-copilot/sonnet" }, {})).toMatchObject({
+      status: "inactive",
+    });
+    await later.dispose();
+    const rewrite = await harness.ctx.model.transform((editor) => {
+      editor.update("github-copilot", "sonnet", (model) => {
+        (model as unknown as { modelID: string }).modelID = "other";
+      });
+    });
+    expect(await explain({ alias: "github-copilot/sonnet" }, {})).toEqual({
+      status: "unavailable",
+    });
+    await rewrite.dispose();
+    harness.removeSource("github-copilot", "sonnet-4");
+    expect(await explain({ alias: "github-copilot/sonnet" }, {})).toMatchObject({
+      status: "unresolved",
+      explanation: { failure: { stage: "matching" } },
+    });
+    // A collision invalidates the whole replay instead of serving an old explanation.
+    harness.addSource(sourceModel({ id: "sonnet", providerID: "github-copilot", released: 9999 }));
+    expect(await explain({ alias: "github-copilot/sonnet" }, {})).toEqual({
+      status: "unavailable",
+    });
+    await stop?.();
+  });
+});
+
+describe("inspection snapshot regressions", () => {
+  it.each(["inspect", "explain"])(
+    "%s does not publish a snapshot superseded while history is saved",
+    async (method) => {
+      const harness = createHarness({ sources: DEFAULT_SOURCES(), options: SIMPLE_OPTIONS() });
+      const stop = await floatingModels.setup(harness.ctx);
+      const handler = harness.rpc.handlers[0]?.[method];
+      if (!handler) throw new Error("missing RPC handler");
+      harness.addSource(
+        sourceModel({ id: "sonnet-5", providerID: "github-copilot", released: 5000 }),
+      );
+      vi.spyOn(harness.ctx.storage, "set").mockImplementationOnce(async () => {
+        harness.addSource(
+          sourceModel({ id: "sonnet-6", providerID: "github-copilot", released: 6000 }),
+        );
+        harness.replay();
+      });
+      const response = await handler(
+        method === "explain" ? { alias: "github-copilot/sonnet" } : {},
+        {},
+      );
+      expect(response).toMatchObject(
+        method === "explain" ? { status: "unavailable" } : { rows: [] },
+      );
+      const next = await harness.rpc.handlers[0]?.explain?.({ alias: "github-copilot/sonnet" }, {});
+      expect(next).toMatchObject({
+        status: "active",
+        explanation: { winner: "github-copilot/sonnet-6" },
+      });
+      await stop?.();
+    },
+  );
+
+  it("looks up status by raw alias identity even when display escapes collide", async () => {
+    const harness = createHarness({
+      sources: DEFAULT_SOURCES(),
+      options: {
+        aliases: {
+          "github-copilot/a\n": { match: "github-copilot/missing-*" },
+          "github-copilot/a\\u000a": { match: "github-copilot/sonnet-*" },
+        },
+      },
+    });
+    const stop = await floatingModels.setup(harness.ctx);
+    const response = await harness.rpc.handlers[0]?.explain?.(
+      { alias: "github-copilot/a\\u000a" },
+      {},
+    );
+    expect(response).toMatchObject({
+      status: "active",
+      explanation: { winner: "github-copilot/sonnet-4" },
+    });
+    await stop?.();
+  });
+});
