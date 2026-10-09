@@ -1,5 +1,6 @@
 import type { Plugin } from "@opencode/plugin/tui";
 import {
+  type CandidateExplanation,
   formatCandidateDetail,
   formatExplanation,
   formatExplanationOverview,
@@ -14,7 +15,7 @@ const COMMAND_TITLE = "Model aliases";
 const SLASH_COMMAND_NAME = "model-aliases";
 
 const USAGE_MESSAGE =
-  "Unexpected arguments. Use /model-aliases or /model-aliases explain <provider/alias>.";
+  'Unexpected arguments. Use /model-aliases or /model-aliases explain <provider/alias>. Quote the alias if it contains spaces: /model-aliases explain "<provider/alias>".';
 const ERROR_MESSAGE = "Unable to load model aliases. Please reload or try again.";
 
 export type InspectResponseRow = InspectReportRow;
@@ -200,13 +201,17 @@ const plugin = {
       },
       run: async (input?: string) => {
         const args = input?.trim() ?? "";
-        const explainMatch = /^explain\s+(\S+)$/.exec(args);
-        if (explainMatch?.[1]) {
+        // Alias keys may contain spaces; a quoted argument preserves the exact
+        // key, while the unquoted form keeps the historical single-token shape.
+        const explainMatch = /^explain\s+("([^"]*)"|(\S+))$/.exec(args);
+        const quoted = explainMatch?.[2];
+        const alias = quoted !== undefined ? quoted : explainMatch?.[3];
+        if (explainMatch && alias !== undefined && alias.length > 0) {
           const location = context.location ?? context.data.location.default();
           try {
             const response = await context.client
               .rpc(ModelAliasesRpc)
-              .explain({ alias: explainMatch[1] }, { location });
+              .explain({ alias }, { location });
             if (!isExplainResponse(response)) {
               await context.ui.dialog.alert({ title: COMMAND_TITLE, message: ERROR_MESSAGE });
               return;
@@ -261,6 +266,15 @@ const plugin = {
             const eligibleCandidates = report.candidates.filter((c) => c.outcome === "eligible");
             const rejectedCandidates = report.candidates.filter((c) => c.outcome === "rejected");
 
+            // Explanation IDs are escaped display text, not identities: two raw
+            // IDs can escape to the same string (a newline vs a literal
+            // "\\u000a"). Selection values index the candidates losslessly.
+            const valueOfCandidate = (candidate: CandidateExplanation) =>
+              `__candidate_${report.candidates.indexOf(candidate)}`;
+            const candidateByValue = new Map<string, CandidateExplanation>(
+              report.candidates.map((candidate) => [valueOfCandidate(candidate), candidate]),
+            );
+
             for (const candidate of [
               ...selectedCandidates,
               ...eligibleCandidates,
@@ -274,20 +288,23 @@ const plugin = {
                 category: candidate.outcome,
                 title,
                 ...(candidate.outcome === "rejected" ? { footer: candidate.stage } : {}),
-                value: candidate.id,
+                value: valueOfCandidate(candidate),
               });
             }
 
+            let current: string | undefined;
             while (true) {
               const selectedKey = await context.ui.dialog.select({
                 title: `Model alias explanation: ${report.alias}`,
                 placeholder: "Filter candidates...",
                 options,
+                ...(current === undefined ? {} : { current }),
               });
 
               if (selectedKey === undefined) {
                 return;
               }
+              current = selectedKey;
 
               let confirmed: boolean | undefined;
               if (selectedKey === "__overview__") {
@@ -297,7 +314,7 @@ const plugin = {
                   label: { confirm: "Back to candidates", cancel: "Exit" },
                 });
               } else {
-                const selectedCandidate = report.candidates.find((c) => c.id === selectedKey);
+                const selectedCandidate = candidateByValue.get(selectedKey);
                 if (selectedCandidate) {
                   confirmed = await context.ui.dialog.confirm({
                     title: `Candidate: ${selectedCandidate.id}`,
