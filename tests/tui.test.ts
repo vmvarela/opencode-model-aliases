@@ -1067,7 +1067,92 @@ describe("TUI change notifications", () => {
 });
 
 describe("TUI explain action", () => {
-  it("uses structured explain RPC with the current location and renders its decision", async () => {
+  it("renders interactive dialog.select with overview and candidates grouped by outcome", async () => {
+    const explainHandler = vi.fn(async () => ({
+      status: "active",
+      explanation: {
+        alias: "p/alias",
+        strategy: "latest",
+        unmatched: 3,
+        stages: [
+          { name: "matching", accepted: 2 },
+          { name: "filtering", accepted: 2 },
+          { name: "selection", accepted: 1 },
+        ],
+        winner: "p/winner",
+        candidates: [
+          {
+            id: "p/winner",
+            matchedPatterns: ["p/*"],
+            outcome: "selected",
+            stage: "selection",
+            released: 2000,
+            reasons: [{ code: "newest-release", message: "Newest eligible candidate" }],
+          },
+          {
+            id: "p/older",
+            matchedPatterns: ["p/*"],
+            outcome: "eligible",
+            stage: "selection",
+            released: 1000,
+            reasons: [
+              { code: "older-release", message: "Older release than the selected candidate" },
+            ],
+          },
+          {
+            id: "p/rejected",
+            matchedPatterns: ["p/*"],
+            outcome: "rejected",
+            stage: "filtering",
+            reasons: [{ code: "requirement-not-met", message: "Does not satisfy minContext>=100" }],
+          },
+        ],
+      },
+    }));
+    const location = { directory: "/project" };
+    const harness = createStrictContext({ explainHandler, location });
+    const stop = plugin.setup(harness.context);
+    await harness.activeCommands[0]?.run(" explain p/alias ");
+    expect(explainHandler).toHaveBeenCalledWith({ alias: "p/alias" }, { location });
+    expect(harness.selectCalls).toHaveLength(1);
+    const call = harness.selectCalls[0];
+    expect(call?.title).toBe("Model alias explanation: p/alias");
+    expect(call?.placeholder).toBe("Filter candidates...");
+    expect(call?.options).toEqual([
+      {
+        category: "overview",
+        title: "Resolution overview",
+        description: "matching: 2 → filtering: 2 → selection: 1",
+        footer: "active",
+        value: "__overview__",
+      },
+      {
+        category: "selected",
+        title: "p/winner",
+        description: "Newest eligible candidate",
+        footer: "selection",
+        value: "p/winner",
+      },
+      {
+        category: "eligible",
+        title: "p/older",
+        description: "Older release than the selected candidate",
+        footer: "selection",
+        value: "p/older",
+      },
+      {
+        category: "rejected",
+        title: "p/rejected",
+        description: "Does not satisfy minContext>=100",
+        footer: "filtering",
+        value: "p/rejected",
+      },
+    ]);
+    expect(harness.alerts).toHaveLength(0);
+    await stop?.();
+  });
+
+  it("opens candidate detail or overview alert when selected from dialog", async () => {
     const explainHandler = vi.fn(async () => ({
       status: "active",
       explanation: {
@@ -1092,14 +1177,39 @@ describe("TUI explain action", () => {
         ],
       },
     }));
-    const location = { directory: "/project" };
-    const harness = createStrictContext({ explainHandler, location });
+    const harness = createStrictContext({ explainHandler, selectReturnValue: "p/model" });
     const stop = plugin.setup(harness.context);
-    await harness.activeCommands[0]?.run(" explain p/alias ");
-    expect(explainHandler).toHaveBeenCalledWith({ alias: "p/alias" }, { location });
+    await harness.activeCommands[0]?.run("explain p/alias");
+    expect(harness.alerts.at(-1)?.title).toBe("Candidate: p/model");
     expect(harness.alerts.at(-1)?.message).toContain("✓ p/model (selected)");
     expect(harness.alerts.at(-1)?.message).toContain("Newest eligible candidate");
+
+    harness.setSelectReturn("__overview__");
+    await harness.activeCommands[0]?.run("explain p/alias");
+    expect(harness.alerts.at(-1)?.title).toBe("Model alias explanation: p/alias");
+    expect(harness.alerts.at(-1)?.message).toContain("matching: 1 → filtering: 1 → selection: 1");
+    expect(harness.alerts.at(-1)?.message).toContain("Winner: p/model");
+    await stop?.();
+  });
+
+  it("renders short alert directly when candidate list is empty", async () => {
+    const explainHandler = vi.fn(async () => ({
+      status: "unresolved",
+      explanation: {
+        alias: "p/alias",
+        strategy: "latest",
+        unmatched: 0,
+        stages: [{ name: "matching", accepted: 0 }],
+        failure: { stage: "matching", code: "no-candidates", message: "no candidate matched" },
+        candidates: [],
+      },
+    }));
+    const harness = createStrictContext({ explainHandler });
+    const stop = plugin.setup(harness.context);
+    await harness.activeCommands[0]?.run("explain p/alias");
     expect(harness.selectCalls).toHaveLength(0);
+    expect(harness.alerts.at(-1)?.title).toBe("Model alias explanation");
+    expect(harness.alerts.at(-1)?.message).toContain("Failed at matching: no candidate matched");
     await stop?.();
   });
 

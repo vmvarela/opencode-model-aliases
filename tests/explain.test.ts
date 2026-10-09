@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { AliasConfig, Candidate } from "../src/config.js";
-import { formatExplanation, isExplainResponse } from "../src/explain.js";
+import {
+  formatCandidateDetail,
+  formatExplanation,
+  formatExplanationOverview,
+  isExplainResponse,
+} from "../src/explain.js";
 import { normalizeOptions } from "../src/normalize.js";
 import { resolveLatest } from "../src/resolve.js";
 
@@ -132,6 +137,31 @@ describe("resolution explanation", () => {
     }
     expect(formatExplanation({ status: "unknown-alias" })).toContain("Unknown alias");
     expect(formatExplanation({ status: "unavailable" })).toContain("unavailable");
+  });
+
+  it("formats candidate details and overview with sanitized fields and stage indicators", () => {
+    const result = resolve([model("m-a"), model("m-b", { enabled: false })]);
+    const response = { status: "active" as const, explanation: result.explanation };
+    const overview = formatExplanationOverview(response);
+    expect(overview).toContain("Alias: p/alias");
+    expect(overview).toContain("Strategy: latest");
+    expect(overview).toContain("Status: active");
+    expect(overview).toContain("Winner: p/m-a");
+    expect(overview).toContain("Candidates: 2");
+
+    const [winner, rejected] = result.explanation.candidates;
+    expect(winner).toBeDefined();
+    expect(rejected).toBeDefined();
+    if (winner && rejected) {
+      const winnerDetail = formatCandidateDetail(winner);
+      expect(winnerDetail).toContain("✓ p/m-a (selected)");
+      expect(winnerDetail).toContain("passed enabled/status and configured requirement filters");
+
+      const rejectedDetail = formatCandidateDetail(rejected);
+      expect(rejectedDetail).toContain("✗ p/m-b (rejected)");
+      expect(rejectedDetail).toContain("rejected at: filtering");
+      expect(rejectedDetail).toContain("Model is disabled");
+    }
   });
 });
 

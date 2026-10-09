@@ -1,5 +1,10 @@
 import type { Plugin } from "@opencode/plugin/tui";
-import { formatExplanation, isExplainResponse } from "./explain.js";
+import {
+  formatCandidateDetail,
+  formatExplanation,
+  formatExplanationOverview,
+  isExplainResponse,
+} from "./explain.js";
 import type { InspectReportRow } from "./report.js";
 import { ModelAliasesRpc } from "./rpc.js";
 import { type AliasTransition, isAliasTransition } from "./transition.js";
@@ -202,10 +207,95 @@ const plugin = {
             const response = await context.client
               .rpc(ModelAliasesRpc)
               .explain({ alias: explainMatch[1] }, { location });
-            await context.ui.dialog.alert({
-              title: "Model alias explanation",
-              message: isExplainResponse(response) ? formatExplanation(response) : ERROR_MESSAGE,
+            if (!isExplainResponse(response)) {
+              await context.ui.dialog.alert({ title: COMMAND_TITLE, message: ERROR_MESSAGE });
+              return;
+            }
+            if (response.status === "unknown-alias" || response.status === "unavailable") {
+              await context.ui.dialog.alert({
+                title: "Model alias explanation",
+                message: formatExplanation(response),
+              });
+              return;
+            }
+
+            const report = response.explanation;
+            if (report.candidates.length === 0) {
+              await context.ui.dialog.alert({
+                title: "Model alias explanation",
+                message: formatExplanation(response),
+              });
+              return;
+            }
+
+            const options: Array<{
+              category?: string;
+              title: string;
+              description?: string;
+              footer?: string;
+              value: string;
+            }> = [
+              {
+                category: "overview",
+                title: "Resolution overview",
+                description: report.stages.map((s) => `${s.name}: ${s.accepted}`).join(" → "),
+                footer: response.status,
+                value: "__overview__",
+              },
+            ];
+
+            const selectedCandidates = report.candidates.filter((c) => c.outcome === "selected");
+            const eligibleCandidates = report.candidates.filter((c) => c.outcome === "eligible");
+            const rejectedCandidates = report.candidates.filter((c) => c.outcome === "rejected");
+
+            for (const candidate of [
+              ...selectedCandidates,
+              ...eligibleCandidates,
+              ...rejectedCandidates,
+            ]) {
+              let description: string;
+              if (candidate.reasons.length > 0) {
+                description = candidate.reasons.map((r) => r.message).join("; ");
+              } else if (candidate.outcome === "rejected") {
+                description = `rejected at: ${candidate.stage}`;
+              } else {
+                description = candidate.stage;
+              }
+
+              options.push({
+                category: candidate.outcome,
+                title: candidate.id,
+                description,
+                footer: candidate.stage,
+                value: candidate.id,
+              });
+            }
+
+            const selectedKey = await context.ui.dialog.select({
+              title: `Model alias explanation: ${report.alias}`,
+              placeholder: "Filter candidates...",
+              options,
             });
+
+            if (selectedKey === undefined) {
+              return;
+            }
+
+            if (selectedKey === "__overview__") {
+              await context.ui.dialog.alert({
+                title: `Model alias explanation: ${report.alias}`,
+                message: formatExplanationOverview(response),
+              });
+              return;
+            }
+
+            const selectedCandidate = report.candidates.find((c) => c.id === selectedKey);
+            if (selectedCandidate) {
+              await context.ui.dialog.alert({
+                title: `Candidate: ${selectedCandidate.id}`,
+                message: formatCandidateDetail(selectedCandidate),
+              });
+            }
           } catch {
             await context.ui.dialog.alert({ title: COMMAND_TITLE, message: ERROR_MESSAGE });
           }

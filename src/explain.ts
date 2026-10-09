@@ -96,6 +96,46 @@ export function isExplainResponse(value: unknown): value is ExplainResponse {
   );
 }
 
+export function formatCandidateDetail(candidate: CandidateExplanation): string {
+  const marker =
+    candidate.outcome === "selected" ? "✓" : candidate.outcome === "rejected" ? "✗" : "·";
+  const lines = [
+    `${marker} ${sanitize(candidate.id)} (${candidate.outcome})`,
+    `  matched: ${candidate.matchedPatterns.map(sanitize).join(", ")}`,
+  ];
+  if (candidate.stage === "selection")
+    lines.push("  passed enabled/status and configured requirement filters");
+  if (candidate.outcome === "rejected") lines.push(`  rejected at: ${candidate.stage}`);
+  if (candidate.released !== undefined) {
+    const date = new Date(candidate.released);
+    lines.push(
+      `  released: ${Number.isFinite(date.getTime()) ? date.toISOString() : candidate.released}`,
+    );
+  }
+  for (const reason of candidate.reasons) lines.push(`  ${sanitize(reason.message)}`);
+  return lines.join("\n");
+}
+
+export function formatExplanationOverview(
+  response: Extract<ExplainResponse, { explanation: ResolutionExplanation }>,
+): string {
+  const report = response.explanation;
+  const lines = [
+    `Alias: ${sanitize(report.alias)}`,
+    `Strategy: ${report.strategy}`,
+    `Status: ${response.status}`,
+    report.stages.map((stage) => `${stage.name}: ${stage.accepted}`).join(" → "),
+  ];
+  if (report.winner) lines.push(`Winner: ${sanitize(report.winner)}`);
+  if (report.failure)
+    lines.push(`Failed at ${report.failure.stage}: ${sanitize(report.failure.message)}`);
+  lines.push(
+    `Candidates: ${report.candidates.length}`,
+    `Other catalog models: ${report.unmatched} did not match the alias provider/include patterns.`,
+  );
+  return lines.join("\n");
+}
+
 export function formatExplanation(response: ExplainResponse): string {
   if (response.status === "unknown-alias")
     return "Unknown alias. Use /model-aliases to view configured aliases.";
@@ -111,23 +151,7 @@ export function formatExplanation(response: ExplainResponse): string {
   if (report.failure)
     lines.push(`Failed at ${report.failure.stage}: ${sanitize(report.failure.message)}`);
   for (const candidate of report.candidates) {
-    const marker =
-      candidate.outcome === "selected" ? "✓" : candidate.outcome === "rejected" ? "✗" : "·";
-    lines.push(
-      "",
-      `${marker} ${sanitize(candidate.id)} (${candidate.outcome})`,
-      `  matched: ${candidate.matchedPatterns.map(sanitize).join(", ")}`,
-    );
-    if (candidate.stage === "selection")
-      lines.push("  passed enabled/status and configured requirement filters");
-    if (candidate.outcome === "rejected") lines.push(`  rejected at: ${candidate.stage}`);
-    if (candidate.released !== undefined) {
-      const date = new Date(candidate.released);
-      lines.push(
-        `  released: ${Number.isFinite(date.getTime()) ? date.toISOString() : candidate.released}`,
-      );
-    }
-    for (const reason of candidate.reasons) lines.push(`  ${sanitize(reason.message)}`);
+    lines.push("", formatCandidateDetail(candidate));
   }
   lines.push(
     "",
