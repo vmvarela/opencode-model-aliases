@@ -9,7 +9,9 @@ const FILE_NAME = "opencode-model-aliases.jsonc";
 
 /** Raw options read from the file; values are not validated yet.
  *  Unrecognized root keys are preserved as-is: normalizeOptions
- *  must reject them as parse-error (no silent whitelisting). */
+ *  must reject them as parse-error (no silent whitelisting).
+ *  The single exception is `$schema`: file-only metadata, validated and
+ *  stripped before it can reach the merge (see loadConfigFile). */
 export interface RawFileOptions {
   readonly aliases?: Record<string, unknown>;
   readonly strict?: unknown;
@@ -81,12 +83,25 @@ export async function loadConfigFile(startDirectory: string): Promise<LoadConfig
       };
     }
 
-    // All own keys of the file are preserved, including unknown ones:
-    // whitelisting would hide root typos before validation. The spread
-    // copies as an own data property, safe against hostile "__proto__"
-    // keys. The aliases container was already validated above, hence the
-    // cast.
-    const options = { ...data } as RawFileOptions;
+    // `$schema` is the only root key with file-level semantics: it names
+    // the JSON Schema for editor support and is not part of the plugin
+    // options. Accepted here as a non-empty string, never forwarded to
+    // the merge: inline options have no `$schema` channel, so
+    // normalizeOptions keeps rejecting it as an unknown root key.
+    const { $schema: metadata, ...rest } = data;
+    if (metadata !== undefined && (typeof metadata !== "string" || metadata.length === 0)) {
+      return {
+        ok: false,
+        reason: `config file "${candidate}": $schema must be a non-empty string`,
+      };
+    }
+
+    // All other own keys of the file are preserved, including unknown
+    // ones: whitelisting would hide root typos before validation. The
+    // rest spread copies each key as an own data property, safe against
+    // hostile "__proto__" keys. The aliases container was already
+    // validated above, hence the cast.
+    const options = rest as RawFileOptions;
     return { ok: true, file: { path: candidate, options } };
   }
 }

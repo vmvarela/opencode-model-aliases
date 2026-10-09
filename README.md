@@ -162,6 +162,35 @@ replaces a file alias with the same key, and inline `strict`/`debug` values win.
 inline options apply when OpenCode reloads its configuration. The `.jsonc` file is read when
 the plugin starts, so restart OpenCode after editing it.
 
+## Editor support
+
+`schema.json` ships with the package: a draft-07 JSON Schema for the plugin options. Point
+the config file at it and editors autocomplete and validate the shape (JSONC comments and
+trailing commas are fine):
+
+```jsonc
+// .opencode/opencode-model-aliases.jsonc — complete example
+{
+  "$schema": "https://raw.githubusercontent.com/vmvarela/opencode-model-aliases/v0.4.0/schema.json",
+  "strict": true,
+  "debug": false,
+  "aliases": {
+    "openai/gpt-sol":  { "match": "openai/gpt-*-sol" },
+    "openai/latest": {
+      "match": ["openai/gpt-*", "openai/o*"],
+      "exclude": ["openai/*-preview"],
+      "filter": { "status": ["active", "beta"], "minContext": 128000 }
+    }
+  }
+}
+```
+
+`$schema` is file-only metadata: editors may require it, the plugin validates it as a
+non-empty string and strips it before merging. Inline plugin options never accept it.
+The schema checks shape only — glob compilation, the literal-provider rule and provider
+equality between patterns and the alias key are still enforced by the plugin at runtime,
+which remains authoritative.
+
 ## When things fail
 
 - **Invalid configuration fails at startup**, including unknown keys and invalid globs.

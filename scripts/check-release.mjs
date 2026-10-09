@@ -279,7 +279,15 @@ assert.ok(Array.isArray(packOutput) && packOutput.length === 1, "pack inesperado
 assert.equal(packOutput[0].name, "opencode-model-aliases");
 const packedFiles = packOutput[0].files.map((entry) => entry.path);
 // package.json always goes into the npm tarball in addition to the files list.
-const allowedRoots = ["index.js", "tui.js", "dist", "README.md", "LICENSE", "package.json"];
+const allowedRoots = [
+  "index.js",
+  "tui.js",
+  "dist",
+  "schema.json",
+  "README.md",
+  "LICENSE",
+  "package.json",
+];
 const leaked = packedFiles.filter((file) => {
   return !allowedRoots.some((root) => file === root || file.startsWith(`${root}/`));
 });
@@ -290,6 +298,7 @@ for (const required of [
   "tui.js",
   "dist/index.js",
   "dist/tui.js",
+  "schema.json",
   "README.md",
   "LICENSE",
 ]) {
