@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { type ParseError, parse, printParseErrorCode } from "jsonc-parser";
+import { getNodeValue, type ParseError, parseTree, printParseErrorCode } from "jsonc-parser";
 import { isPlainObject } from "./config.js";
 
 /** Directory + file name of the plugin configuration file. */
@@ -59,9 +59,12 @@ export async function loadConfigFile(startDirectory: string): Promise<LoadConfig
     }
 
     // The parser is failure-tolerant: without inspecting `errors` it would
-    // accept partial data as if it were valid.
+    // accept partial data as if it were valid. parseTree + getNodeValue
+    // build null-prototype objects, so a hostile "__proto__" root key stays
+    // an own enumerable key and normalizeOptions rejects it; `parse` would
+    // silently turn it into a prototype mutation and hide the key.
     const errors: ParseError[] = [];
-    const data = parse(text, errors, { allowTrailingComma: true });
+    const tree = parseTree(text, errors, { allowTrailingComma: true });
     if (errors.length > 0) {
       const first = errors[0];
       if (!first) return { ok: false, reason: `config file "${candidate}" has malformed JSONC` };
@@ -70,6 +73,7 @@ export async function loadConfigFile(startDirectory: string): Promise<LoadConfig
         reason: `config file "${candidate}" has malformed JSONC: ${printParseErrorCode(first.error)} at offset ${first.offset}`,
       };
     }
+    const data = tree === undefined ? undefined : getNodeValue(tree);
     if (!isPlainObject(data)) {
       return {
         ok: false,

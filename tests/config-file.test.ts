@@ -380,6 +380,24 @@ describe("separate JSONC config file", () => {
     expect(harness.callbacks).toHaveLength(0);
   });
 
+  it("clave raíz hostil __proto__ se preserva como propia y normalizeOptions la rechaza", async () => {
+    const project = path.join(tempRoot, "proj");
+    mkdirSync(project, { recursive: true });
+    writeConfigFile(project, '{ "$schema": "schema.json", "aliases": {}, "__proto__": {} }');
+    const result = await loadConfigFile(project);
+    expect(result.ok).toBe(true);
+    if (result.ok && result.file) {
+      // La clave debe ser propia y enumerable, no una mutación del prototipo.
+      expect(Object.hasOwn(result.file.options, "__proto__")).toBe(true);
+      expect(Object.keys(result.file.options)).toContain("__proto__");
+    }
+    // normalizeOptions debe rechazarla como clave desconocida: el setup falla
+    // y no registra transformaciones.
+    const harness = createHarness({ sources: SOURCES(), directory: project });
+    await expect(floatingModels.setup(harness.ctx)).rejects.toThrow(/__proto__/);
+    expect(harness.callbacks).toHaveLength(0);
+  });
+
   it("el RPC inspect expone el alias definido solo en el archivo", async () => {
     const project = path.join(tempRoot, "proj");
     mkdirSync(project, { recursive: true });
