@@ -28,6 +28,80 @@ afterEach(() => {
   removeTempRoot(tempRoot);
 });
 
+describe("schema metadata ($schema)", () => {
+  const SCHEMA_URL =
+    "https://raw.githubusercontent.com/vmvarela/opencode-model-aliases/master/schema.json";
+
+  it("archivo con $schema válido se acepta, se elimina del merge y el setup funciona", async () => {
+    const project = path.join(tempRoot, "proj");
+    mkdirSync(project, { recursive: true });
+    writeConfigFile(
+      project,
+      [
+        "{",
+        `  "$schema": "${SCHEMA_URL}",`,
+        '  "aliases": { "anthropic/float": { "match": "anthropic/**" } },',
+        "}",
+      ].join("\n"),
+    );
+    const loaded = await loadConfigFile(project);
+    expect(loaded.ok).toBe(true);
+    if (loaded.ok && loaded.file) {
+      // Stripped before the merge: normalizeOptions must never see it.
+      expect("$schema" in loaded.file.options).toBe(false);
+      expect(loaded.file.options.strict).toBeUndefined();
+    }
+    const harness = createHarness({ sources: SOURCES(), directory: project });
+    await floatingModels.setup(harness.ctx);
+    expect(harness.view().get("anthropic/float")?.modelID).toBe("claude-b");
+  });
+
+  it("archivo con $schema inválido (no string, vacío, null) falla sin registrar", async () => {
+    const badFiles = [
+      '{ "$schema": 3, "aliases": {} }',
+      '{ "$schema": "", "aliases": {} }',
+      '{ "$schema": null, "aliases": {} }',
+    ];
+    for (const [index, contents] of badFiles.entries()) {
+      const project = path.join(tempRoot, `bad-${index}`);
+      mkdirSync(project, { recursive: true });
+      writeConfigFile(project, contents);
+      const loaded = await loadConfigFile(project);
+      expect(loaded.ok).toBe(false);
+      if (!loaded.ok) expect(loaded.reason).toMatch(/\$schema must be a non-empty string/);
+    }
+  });
+
+  it("archivo con $schema válido pero errata en la raíz (strcit) sigue fallando", async () => {
+    const project = path.join(tempRoot, "proj");
+    mkdirSync(project, { recursive: true });
+    writeConfigFile(
+      project,
+      `{ "$schema": "${SCHEMA_URL}", "aliases": { "anthropic/float": { "match": "anthropic/**" } }, "strcit": true }`,
+    );
+    const harness = createHarness({ sources: SOURCES(), directory: project });
+    await expect(floatingModels.setup(harness.ctx)).rejects.toThrow(/strcit/);
+    expect(harness.callbacks).toHaveLength(0);
+  });
+
+  it("$schema inline sigue rechazado como clave raíz desconocida", async () => {
+    const project = path.join(tempRoot, "proj");
+    mkdirSync(project, { recursive: true });
+    const harness = createHarness({
+      sources: SOURCES(),
+      options: {
+        aliases: { "anthropic/float": { match: "anthropic/**" } },
+        $schema: SCHEMA_URL,
+      },
+      directory: project,
+    });
+    await expect(floatingModels.setup(harness.ctx)).rejects.toThrow(
+      /unsupported key\(s\): \$schema/,
+    );
+    expect(harness.callbacks).toHaveLength(0);
+  });
+});
+
 describe("separate JSONC config file", () => {
   it("file-only options con comentarios y trailing commas: alias, strict y debug aplican", async () => {
     const project = path.join(tempRoot, "proj");
@@ -303,6 +377,24 @@ describe("separate JSONC config file", () => {
     );
     const harness = createHarness({ sources: SOURCES(), directory: project });
     await expect(floatingModels.setup(harness.ctx)).rejects.toThrow(/strcit/);
+    expect(harness.callbacks).toHaveLength(0);
+  });
+
+  it("clave raíz hostil __proto__ se preserva como propia y normalizeOptions la rechaza", async () => {
+    const project = path.join(tempRoot, "proj");
+    mkdirSync(project, { recursive: true });
+    writeConfigFile(project, '{ "$schema": "schema.json", "aliases": {}, "__proto__": {} }');
+    const result = await loadConfigFile(project);
+    expect(result.ok).toBe(true);
+    if (result.ok && result.file) {
+      // La clave debe ser propia y enumerable, no una mutación del prototipo.
+      expect(Object.hasOwn(result.file.options, "__proto__")).toBe(true);
+      expect(Object.keys(result.file.options)).toContain("__proto__");
+    }
+    // normalizeOptions debe rechazarla como clave desconocida: el setup falla
+    // y no registra transformaciones.
+    const harness = createHarness({ sources: SOURCES(), directory: project });
+    await expect(floatingModels.setup(harness.ctx)).rejects.toThrow(/__proto__/);
     expect(harness.callbacks).toHaveLength(0);
   });
 

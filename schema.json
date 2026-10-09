@@ -1,0 +1,90 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/vmvarela/opencode-model-aliases/v0.4.0/schema.json",
+  "title": "opencode-model-aliases plugin options",
+  "description": "Schema for the plugin configuration file `.opencode/opencode-model-aliases.jsonc` and for the inline plugin `options` in `opencode.json`; file and inline options are merged before validation, so `aliases` may be omitted in the file when it is provided inline. The schema describes the JSON shape only: glob compilation, provider equality between match patterns and the alias key, and model-catalog collisions are enforced by the plugin at runtime. `$schema` is file-only metadata: it is accepted here and stripped before merging; inline options never accept it.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string", "minLength": 1, "description": "File-only metadata; removed before merging and never accepted in inline options." },
+    "aliases": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/definitions/selector" },
+      "additionalProperties": { "$ref": "#/definitions/alias" }
+    },
+    "strict": { "type": "boolean" },
+    "debug": { "type": "boolean" }
+  },
+  "definitions": {
+    "selector": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^#/*?\\[\\]{}()!+@|\\\\]+/[^#]+$"
+    },
+    "alias": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["match"],
+      "properties": {
+        "match": {
+          "oneOf": [
+            { "$ref": "#/definitions/selector" },
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/definitions/selector" }
+            }
+          ]
+        },
+        "exclude": {
+          "oneOf": [
+            { "$ref": "#/definitions/selector" },
+            {
+              "type": "array",
+              "items": { "$ref": "#/definitions/selector" }
+            }
+          ]
+        },
+        "filter": { "$ref": "#/definitions/filter" },
+        "select": { "$ref": "#/definitions/select" },
+        "name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "filter": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "enum": ["active", "alpha", "beta"] }
+        },
+        "capabilities": { "$ref": "#/definitions/capabilities" },
+        "minContext": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tools": { "type": "boolean" },
+        "input": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "output": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "select": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strategy"],
+      "properties": { "strategy": { "type": "string", "enum": ["latest"] } }
+    }
+  }
+}
