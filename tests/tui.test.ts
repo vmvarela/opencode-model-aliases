@@ -1,6 +1,5 @@
 import type { Plugin } from "@opencode/plugin/tui";
 import { describe, expect, it, vi } from "vitest";
-import { aliasIdentity } from "../src/report.js";
 import { ModelAliasesRpc } from "../src/rpc.js";
 import plugin, {
   formatDetailMessage,
@@ -668,7 +667,7 @@ describe("TUI dialog navigation: select list and detail view", () => {
     const displayedKey = "provider/a\\u000a";
     const collidingRows: InspectResponseRow[] = [
       {
-        identity: aliasIdentity("provider/a\n"),
+        identity: "provider/a\n",
         key: displayedKey,
         displayName: "A (alias)",
         provider: "provider",
@@ -679,7 +678,7 @@ describe("TUI dialog navigation: select list and detail view", () => {
         catalogID: "target-newline",
       },
       {
-        identity: aliasIdentity("provider/a\\u000a"),
+        identity: "provider/a\\u000a",
         key: displayedKey,
         displayName: "A (alias)",
         provider: "provider",
@@ -870,6 +869,7 @@ describe("TUI security, validation, and error boundaries", () => {
           {
             key: "github-copilot/sonnet",
             // missing required displayName
+            identity: "github-copilot/sonnet",
             provider: "github-copilot",
             alias: "sonnet",
             strategy: "latest",
@@ -883,6 +883,7 @@ describe("TUI security, validation, and error boundaries", () => {
           {
             key: "github-copilot/sonnet",
             displayName: 123,
+            identity: "github-copilot/sonnet",
             provider: "github-copilot",
             alias: "sonnet",
             strategy: "latest",
@@ -948,6 +949,7 @@ describe("TUI security, validation, and error boundaries", () => {
           {
             key: "github-copilot/sonnet",
             // missing displayName
+            identity: "github-copilot/sonnet",
             provider: "github-copilot",
             alias: "sonnet",
             strategy: "latest",
@@ -964,6 +966,7 @@ describe("TUI security, validation, and error boundaries", () => {
           {
             key: "github-copilot/sonnet",
             displayName: null,
+            identity: "github-copilot/sonnet",
             provider: "github-copilot",
             alias: "sonnet",
             strategy: "latest",
@@ -1183,8 +1186,8 @@ describe("TUI change notifications", () => {
 
   it("acknowledges colliding escaped keys independently and does not re-notify siblings (#56)", async () => {
     const displayedKey = "provider/a\\u000a";
-    const newlineIdentity = aliasIdentity("provider/a\n");
-    const literalIdentity = aliasIdentity("provider/a\\u000a");
+    const newlineIdentity = "provider/a\n";
+    const literalIdentity = "provider/a\\u000a";
     const change = (id: string, from: string, to: string) => ({
       id,
       from,

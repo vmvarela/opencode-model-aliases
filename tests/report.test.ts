@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import floatingModels, { normalizeOptions } from "../src/index.js";
 import {
   type AliasReportRow,
-  aliasIdentity,
   buildInspectRows,
   buildRows,
   formatReport,
@@ -867,8 +866,8 @@ describe("buildInspectRows structured public primitives", () => {
     // No row contains non-serializable objects or credentials
     for (const r of inspectRows) {
       expect(typeof r.key).toBe("string");
-      // A control-free key keeps its raw key as identity: old acknowledgement
-      // storage stays valid after the #56 fix.
+      // Identity is the raw alias key, so pre-#56 acknowledgement storage
+      // (keyed by the control-free key) stays valid.
       expect(r.identity).toBe(r.key);
       expect(typeof r.provider).toBe("string");
       expect(typeof r.displayName).toBe("string");
@@ -957,23 +956,11 @@ describe("buildInspectRows structured public primitives", () => {
     expect(inspectRows[1]?.key).toBe("provider/a\\u000a");
     expect(inspectRows[0]?.target).toBe("target-newline");
     expect(inspectRows[1]?.target).toBe("target-literal");
-    // Identities are distinct, lossless and never equal to any display-safe
-    // key: suitable as durable, independent acknowledgement keys.
-    expect(inspectRows[0]?.identity).not.toBe(inspectRows[1]?.identity);
+    // Identity is the raw alias key: distinct per row and lossless, so
+    // selection and acknowledgements stay independent.
+    expect(inspectRows[0]?.identity).toBe(newlineKey);
     expect(inspectRows[1]?.identity).toBe(literalKey);
-    expect(inspectRows[0]?.identity).not.toBe(newlineKey);
-    expect(inspectRows[0]?.identity).toContain("\n");
-  });
-
-  it("codifica la identidad sobre unidades de código UTF-16: los pares suplentes huérfanos no colisionan (#56)", () => {
-    // UTF-8 replaces both unpaired surrogates and U+FFFD with U+FFFD, so a
-    // UTF-8 identity would collapse these distinct keys; UTF-16LE keeps
-    // every code unit losslessly.
-    const surrogateKey = "provider/a\n\uD800";
-    const replacementKey = "provider/a\n\uFFFD";
-    expect(sanitize(surrogateKey)).not.toBe(surrogateKey);
-    expect(aliasIdentity(surrogateKey)).not.toBe(aliasIdentity(replacementKey));
-    expect(aliasIdentity("provider/a\n\uDC00")).not.toBe(aliasIdentity(surrogateKey));
+    expect(inspectRows[0]?.identity).not.toBe(inspectRows[1]?.identity);
   });
 
   it("un fallo por requisitos capability/contexto llega a text y rows sin filtrar datos de candidatos", async () => {

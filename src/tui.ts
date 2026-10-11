@@ -56,7 +56,8 @@ export function isInspectResponse(value: unknown): value is InspectResponse {
   if (typeof res.text !== "string" || !Array.isArray(res.rows)) return false;
   if (!res.rows.every(isInspectRow)) return false;
   // Duplicate identities would make selection ambiguous again: a compliant
-  // backend can never emit them (aliasIdentity is injective).
+  // backend can never emit them (identity is the row's raw key, unique per
+  // configured alias).
   const identities = (res.rows as InspectResponseRow[]).map((row) => row.identity);
   return new Set(identities).size === identities.length;
 }
