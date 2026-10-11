@@ -4,6 +4,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # 10.x requires the new writer API; release-notes-generator bundled by
+      # semantic-release 25 still depends on writer ^8 (see PR #53).
+      - dependency-name: conventional-changelog-conventionalcommits
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
