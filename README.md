@@ -136,7 +136,7 @@ declaration order doesn't matter.
 | Option | Default | Notes |
 |---|---|---|
 | `aliases` | required | Object of aliases; `{}` is valid. |
-| `strict` | `false` | Fail startup if any alias doesn't resolve. |
+| `strict` | `false` | Fail startup if any alias doesn't resolve; strict applies at startup only. |
 | `debug` | `false` | Log each resolution as a `[debug]` warning. |
 | `match` | required | Glob or list of globs: `"provider/pattern"`. |
 | `exclude` | none | Same format as `match`. |
@@ -207,11 +207,12 @@ guarantees are documented; don't rely on plugin execution order.
 
 ## Limits, failure and non-goals
 
-- Invalid configuration (including unknown keys and invalid globs) and an alias that would
-  overwrite a real model both fail at startup.
+- Invalid configuration (including unknown keys and invalid globs) fails at startup. Alias/source
+  ID collisions are fatal on every catalog replay, including startup.
 - An alias with no candidate logs a warning and is left out; other aliases keep working.
-  With `strict: true`, startup fails instead. If a target disappears later, the alias
-  disappears until a matching model returns.
+  With `strict: true`, startup fails instead. Strict applies at startup only: losing all
+  targets afterwards degrades to the tolerant behavior — the alias disappears until a
+  matching model returns.
 - Only the `latest` strategy exists. The plugin can't rank by price or quality.
 - Aliases are provider-isolated and never chain.
 - The plugin only reads OpenCode's catalog; it never fetches external model lists.

@@ -376,6 +376,51 @@ describe("opencode-model-aliases plugin", () => {
     expect(harness.view().get("anthropic/void")).toBeUndefined();
   });
 
+  it("strict applies only at startup: a lost target degrades to tolerant behavior and recovers without re-setup", async () => {
+    const harness = createHarness({
+      sources: DEFAULT_SOURCES(),
+      options: {
+        strict: true,
+        aliases: {
+          "github-copilot/sonnet": { match: "github-copilot/**" },
+          "anthropic/pick": { match: "anthropic/**" },
+        },
+      },
+    });
+    await floatingModels.setup(harness.ctx);
+    expect(harness.callbacks).toHaveLength(1);
+    expect(harness.view().get("github-copilot/sonnet")?.modelID).toBe("sonnet-4-exec");
+    expect(harness.view().get("anthropic/pick")?.modelID).toBe("claude-b");
+
+    // Remove the sole matching candidate for one alias. The transform must
+    // degrade to the tolerant path (warn, skip that alias) instead of failing
+    // and being detached by the host.
+    harness.removeSource("github-copilot", "sonnet-4");
+    await expect(harness.ctx.model.list()).resolves.toBeDefined();
+    expect(harness.view().get("github-copilot/sonnet")).toBeUndefined();
+    expect(harness.view().get("anthropic/pick")?.modelID).toBe("claude-b");
+    expect(harness.callbacks).toHaveLength(1);
+    expect(
+      warnings.some((w) => w.includes('"github-copilot/sonnet"') && w.includes("unresolved")),
+    ).toBe(true);
+
+    // The alias recovers when a matching candidate returns, with no re-setup
+    // and while both aliases keep resolving independently.
+    harness.addSource(
+      sourceModel({
+        id: "sonnet-4",
+        providerID: "github-copilot",
+        name: "Sonnet",
+        modelID: "sonnet-4-exec",
+        released: 3_000,
+      }),
+    );
+    await expect(harness.ctx.model.list()).resolves.toBeDefined();
+    expect(harness.view().get("github-copilot/sonnet")?.modelID).toBe("sonnet-4-exec");
+    expect(harness.view().get("anthropic/pick")?.modelID).toBe("claude-b");
+    expect(harness.callbacks).toHaveLength(1);
+  });
+
   it("colisión inicial: setup rechaza pese al list() que traga el fallo", async () => {
     const harness = createHarness({
       sources: [
