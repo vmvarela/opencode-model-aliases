@@ -17,6 +17,11 @@ export type InspectRowStatus = "active" | "inactive" | "unresolved";
  */
 export interface InspectReportRow {
   readonly transition?: AliasTransition;
+  /**
+   * Lossless stable alias identity (see aliasIdentity). Selection and
+   * acknowledgement key only; NEVER display text.
+   */
+  readonly identity: string;
   readonly key: string;
   readonly provider: string;
   /** Visible name: the configured name kept intact, or the default generated one. */
@@ -73,6 +78,19 @@ export function sanitize(value: string): string {
 }
 
 /**
+ * Lossless per-alias identity. Escaping to `\uXXXX` display text is not
+ * injective (a real newline and the literal "\u000a" sanitize identically),
+ * so a control-free key keeps its raw value (matching the pre-identity
+ * acknowledgement storage) and any other key gets a UTF-16LE byte-level
+ * base64url encoding (unpaired surrogates survive, unlike UTF-8) prefixed
+ * with a control character, which no display-safe key can contain:
+ * identities from different classes never collide.
+ */
+export function aliasIdentity(key: string): string {
+  return sanitize(key) === key ? key : `\n${Buffer.from(key, "utf16le").toString("base64url")}`;
+}
+
+/**
  * Builds report rows from the SAME resolution results the transform uses to
  * materialize. No extra queries.
  */
@@ -119,6 +137,7 @@ export function buildInspectRows(
     const slash = row.key.indexOf("/");
     const provider = slash !== -1 ? row.key.slice(0, slash) : row.key;
     const alias = slash !== -1 ? row.key.slice(slash + 1) : row.key;
+    const identity = aliasIdentity(row.key);
     const key = sanitize(row.key);
     const safeProvider = sanitize(provider);
     const safeAlias = sanitize(alias);
@@ -134,6 +153,7 @@ export function buildInspectRows(
     if (row.status === "unresolved") {
       return {
         ...transition,
+        identity,
         key,
         provider: safeProvider,
         displayName: safeDisplayName,
@@ -161,6 +181,7 @@ export function buildInspectRows(
 
     return {
       ...transition,
+      identity,
       key,
       provider: safeProvider,
       displayName: safeDisplayName,

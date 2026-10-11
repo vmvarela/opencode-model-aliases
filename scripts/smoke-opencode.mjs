@@ -544,6 +544,11 @@ async function main() {
               `expected row target "${TARGET}", got "${matchedRow.target ?? matchedRow.catalogID}"`,
             );
           }
+          // #56: a control-free alias key keeps its raw key as identity, so
+          // pre-existing acknowledgement storage stays valid.
+          if (matchedRow.identity !== ALIAS_KEY) {
+            problems.push(`expected row identity "${ALIAS_KEY}", got "${matchedRow.identity}"`);
+          }
         }
       }
 
