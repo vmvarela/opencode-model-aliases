@@ -9,11 +9,10 @@ agents keep pointing at last month's model. This [OpenCode](https://opencode.ai)
 adds **floating aliases** to the model catalog: a stable ID such as `opencode/zen-plan` that
 always resolves to the newest model matching your rules.
 
-> **Release status.** Latest published release: **v0.4.0** (2026-10-09). `master` carries
-> unreleased fixes for [#55](https://github.com/vmvarela/opencode-model-aliases/issues/55) and
-> [#56](https://github.com/vmvarela/opencode-model-aliases/issues/56), closing the tracked 1.0
-> milestone work. v1.0 has not shipped; this README documents v0.4.0 and marks unreleased
-> behavior where it differs.
+> **Docs vs releases.** This README follows the default branch (`master`), which can be
+> ahead of the published npm package; the
+> [GitHub Releases](https://github.com/vmvarela/opencode-model-aliases/releases) page lists
+> what has shipped.
 
 ## Concrete IDs vs aliases
 
@@ -111,7 +110,7 @@ the winner's model info under the alias ID; declaration order doesn't matter.
 | Option | Default | Notes |
 |---|---|---|
 | `aliases` | required | Object of aliases; `{}` is valid. |
-| `strict` | `false` | Fail startup if any alias doesn't resolve. v0.4.0 also fails later catalog refreshes (see Limits); unreleased master keeps it startup-only. |
+| `strict` | `false` | Fail startup if any alias doesn't resolve; strict applies at startup only (see Limits). |
 | `debug` | `false` | Log each resolution as a `[debug]` warning. |
 | `match` | required | Glob or list of globs: `"provider/pattern"`. |
 | `exclude` | none | Same format as `match`. |
@@ -128,15 +127,16 @@ inline `strict`/`debug` values win. Inline options apply when OpenCode reloads i
 configuration; the `.jsonc` file is read at plugin start, so restart after editing it.
 
 For editor autocompletion and shape validation, `schema.json` ships with the package as a
-draft-07 JSON Schema; point the config file's `$schema` at it (file-only metadata: editors
-may require it, the plugin strips it, and inline plugin options never accept it). The schema
-checks shape only — glob compilation, the literal-provider rule and provider equality remain
-runtime-enforced and authoritative.
+draft-07 JSON Schema; point the config file's `$schema` at the default-branch URL
+`https://raw.githubusercontent.com/vmvarela/opencode-model-aliases/master/schema.json`
+(file-only metadata: editors may require it, the plugin strips it, and inline plugin options
+never accept it). The schema checks shape only — glob compilation, the literal-provider rule
+and provider equality remain runtime-enforced and authoritative.
 
 ```jsonc
 // .opencode/opencode-model-aliases.jsonc — complete example
 {
-  "$schema": "https://raw.githubusercontent.com/vmvarela/opencode-model-aliases/v0.4.0/schema.json",
+  "$schema": "https://raw.githubusercontent.com/vmvarela/opencode-model-aliases/master/schema.json",
   "strict": true,
   "aliases": {
     "openai/latest": {
@@ -182,11 +182,9 @@ downstream rewrite of the alias `modelID` by another plugin can make the report 
 - Invalid configuration (including unknown keys and invalid globs) fails at startup, and
   alias/source ID collisions are fatal on every catalog replay, including startup.
 - An alias with no candidate logs a warning and is left out; other aliases keep working.
-  With `strict: true`, startup fails instead. In **v0.4.0**, strict also fails every later
-  catalog refresh where an alias is unresolved, disabling the plugin until every alias
-  resolves again. **Unreleased master** keeps strict at startup only: after a successful
-  startup, a target loss skips only that alias, and it recovers when a matching model
-  returns (fix for [#55](https://github.com/vmvarela/opencode-model-aliases/issues/55)).
+  With `strict: true`, startup fails instead. Strict applies at startup only: after a
+  successful startup, a target loss skips only that alias, and it recovers when a matching
+  model returns.
 - Only the `latest` strategy exists; the plugin can't rank by price or quality. Aliases are
   provider-isolated and never chain, and the plugin only reads OpenCode's catalog — it never
   fetches external model lists.
@@ -205,8 +203,7 @@ orchestration. What happens to a request once it leaves the plugin is OpenCode's
 v1.0 means: reliable deterministic selection from a valid catalog, strict config that fails
 loudly and early, changes that are visible without digging through logs, and verified host
 compatibility (OpenCode 2.0.16 and 2.0.24). The `latest` strategy alone suffices; stability
-comes from determinism and diagnostics, not more selection policies. The tracked 1.0 issues
-are closed on `master`; backlog ideas stay outside 1.0 scope.
+comes from determinism and diagnostics, not more selection policies.
 
 ## Development
 

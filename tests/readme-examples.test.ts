@@ -15,6 +15,10 @@ const validate = ajv.compile(schema);
 const README_PATH = path.join(import.meta.dirname, "..", "README.md");
 const readme = readFileSync(README_PATH, "utf8");
 
+/** Stable schema URL shown in the README; follows the default branch. */
+const MASTER_SCHEMA_URL =
+  "https://raw.githubusercontent.com/vmvarela/opencode-model-aliases/master/schema.json";
+
 const fences = [...readme.matchAll(/```(\w+)\n([\s\S]*?)```/g)].map((match) => ({
   lang: match[1] ?? "",
   body: match[2] ?? "",
@@ -62,20 +66,17 @@ function optionsFromJsonExample(body: string, source: string): unknown[] {
 }
 
 describe("README examples validate against schema.json", () => {
-  it("the schema URL shown in the README matches the schema $id", () => {
-    expect(readme).toContain(String(schema.$id));
-    expect(schema.$id).toBe(
-      "https://raw.githubusercontent.com/vmvarela/opencode-model-aliases/v0.4.0/schema.json",
-    );
+  it("the README shows the stable master schema URL", () => {
+    expect(readme).toContain(MASTER_SCHEMA_URL);
   });
 
-  it("```jsonc fences are complete file configs: parsed, $schema = $id, schema-valid", () => {
+  it("```jsonc fences are complete file configs: parsed, $schema = master URL, schema-valid", () => {
     const jsoncFences = fences.filter((fence) => fence.lang === "jsonc");
     expect(jsoncFences.length).toBeGreaterThan(0);
     for (const fence of jsoncFences) {
       const doc = parseJsoncDoc(fence.body, "jsonc fence");
       const schemaUrl = doc.$schema;
-      expect(schemaUrl, "file example must point at the published schema").toBe(schema.$id);
+      expect(schemaUrl, "file example must point at the master schema").toBe(MASTER_SCHEMA_URL);
       expect(errorsOf(doc), fence.body).toBeUndefined();
     }
   });
