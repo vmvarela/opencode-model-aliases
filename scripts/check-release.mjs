@@ -86,6 +86,12 @@ const conventionalPresetConfig = {
   preset: "conventionalcommits",
   parserOpts: { noteKeywords: BREAKING_NOTE_KEYWORDS },
 };
+// Solo el analizador declara chore(release-1.0) como major: es un marcador de
+// release (1.0 estable), no un cambio de API que deba aparecer en las notas.
+const analyzerPresetConfig = {
+  ...conventionalPresetConfig,
+  releaseRules: [{ type: "chore", scope: "release-1.0", release: "major" }],
+};
 
 // --- Release config and package metadata -------------------------------------
 await step("config .releaserc.json y metadatos package.json", () => {
@@ -93,7 +99,7 @@ await step("config .releaserc.json y metadatos package.json", () => {
   assert.ok(!("tagFormat" in releaseConfig) || releaseConfig.tagFormat === `v\${version}`);
   assert.deepEqual(releaseConfig.plugins[0], [
     "@semantic-release/commit-analyzer",
-    conventionalPresetConfig,
+    analyzerPresetConfig,
   ]);
   assert.deepEqual(releaseConfig.plugins[1], [
     "@semantic-release/release-notes-generator",
@@ -197,6 +203,13 @@ await step("commit-analyzer analyzeCommits sobre fixtures sintéticas", async ()
     { messages: ["perf: acelera el arranque"], expected: "patch" },
     { messages: ["feat: a", "fix: b", "chore: c", "docs: d"], expected: "minor" },
     { messages: ["chore: deps", "docs: readme", "test: mocks"], expected: null },
+    { messages: ["chore(release-1.0): declare stable public API"], expected: "major" },
+    {
+      messages: ["chore(release-1.0): declare stable public API", "feat: nueva cosa"],
+      expected: "major",
+    },
+    { messages: ["chore(other-scope): cosa"], expected: null },
+    { messages: ["chore: release-1.0 sin scope"], expected: null },
   ];
   for (const { messages, expected } of cases) {
     const releaseType = await analyzeCommits(analyzerConfig, {
