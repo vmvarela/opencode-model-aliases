@@ -225,13 +225,6 @@ Explicitly out of scope: prompt classification ("which prompt needs which model"
 routing, provider proxying, credential management, retries/failover, billing, and session
 orchestration. What happens to a request once it leaves the plugin is OpenCode's job.
 
-## The 1.0 line
-
-v1.0 means: reliable deterministic selection from a valid catalog, strict config that fails
-loudly and early, changes that are visible without digging through logs, and verified host
-compatibility (OpenCode 2.0.16 and 2.0.24). The `latest` strategy alone suffices; stability
-comes from determinism and diagnostics, not more selection policies.
-
 ## Development
 
 Requires Node.js 22+ and pnpm 11. Use `pnpm install` then `pnpm run verify` (lint, typecheck,
