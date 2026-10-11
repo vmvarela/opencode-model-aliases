@@ -15,6 +15,10 @@ const validate = ajv.compile(schema);
 const README_PATH = path.join(import.meta.dirname, "..", "README.md");
 const readme = readFileSync(README_PATH, "utf8");
 
+/** Stable schema URL shown in the README; follows the default branch. */
+const MASTER_SCHEMA_URL =
+  "https://raw.githubusercontent.com/vmvarela/opencode-model-aliases/master/schema.json";
+
 const fences = [...readme.matchAll(/```(\w+)\n([\s\S]*?)```/g)].map((match) => ({
   lang: match[1] ?? "",
   body: match[2] ?? "",
@@ -30,16 +34,7 @@ function parseJsoncDoc(body: string, source: string): Record<string, unknown> {
   return doc as Record<string, unknown>;
 }
 
-/** Wraps an alias-fragment fence (bare `"<key>": { ... }` entries) into a
- *  complete options document; trailing commas are tolerated. */
-function wrapAliasFragment(body: string, source: string): Record<string, unknown> {
-  return parseJsoncDoc(`{"aliases": {\n${body}\n}}`, source);
-}
-
 function optionsFromJsonExample(body: string, source: string): unknown[] {
-  if (/^\s*"[^"]+"\s*:/u.test(body)) {
-    return [wrapAliasFragment(body, source)];
-  }
   const doc = parseJsoncDoc(body, source);
   if ("plugins" in doc) {
     expect(Array.isArray(doc.plugins), source).toBe(true);
@@ -62,25 +57,22 @@ function optionsFromJsonExample(body: string, source: string): unknown[] {
 }
 
 describe("README examples validate against schema.json", () => {
-  it("the schema URL shown in the README matches the schema $id", () => {
-    expect(readme).toContain(String(schema.$id));
-    expect(schema.$id).toBe(
-      "https://raw.githubusercontent.com/vmvarela/opencode-model-aliases/v0.4.0/schema.json",
-    );
+  it("the README shows the stable master schema URL", () => {
+    expect(readme).toContain(MASTER_SCHEMA_URL);
   });
 
-  it("```jsonc fences are complete file configs: parsed, $schema = $id, schema-valid", () => {
+  it("```jsonc fences are complete file configs: parsed, $schema = master URL, schema-valid", () => {
     const jsoncFences = fences.filter((fence) => fence.lang === "jsonc");
     expect(jsoncFences.length).toBeGreaterThan(0);
     for (const fence of jsoncFences) {
       const doc = parseJsoncDoc(fence.body, "jsonc fence");
       const schemaUrl = doc.$schema;
-      expect(schemaUrl, "file example must point at the published schema").toBe(schema.$id);
+      expect(schemaUrl, "file example must point at the master schema").toBe(MASTER_SCHEMA_URL);
       expect(errorsOf(doc), fence.body).toBeUndefined();
     }
   });
 
-  it("```json fences are complete options docs, opencode configs or alias fragments — all covered and schema-valid", () => {
+  it("```json fences are complete OpenCode configs or options documents — all covered and schema-valid", () => {
     let covered = 0;
     for (const fence of fences.filter((entry) => entry.lang === "json")) {
       const source = fence.body.slice(0, 60);
@@ -91,6 +83,12 @@ describe("README examples validate against schema.json", () => {
     }
     // No ```json fence is silently skipped.
     expect(covered).toBe(fences.filter((entry) => entry.lang === "json").length);
+  });
+
+  it("rejects bare alias fragments; every example must be a complete document", () => {
+    expect(() =>
+      optionsFromJsonExample('"openai/latest": { "match": "openai/gpt-*" }', "bare fragment"),
+    ).toThrow();
   });
 
   it("rejects malformed complete configs instead of validating recovered parser data", () => {
