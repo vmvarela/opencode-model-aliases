@@ -1,11 +1,12 @@
 import picomatch from "picomatch";
-import type {
-  AllowedStatus,
-  CapabilityRequirement,
-  Checker,
-  NormalizedAlias,
-  NormalizedConfig,
-  Options,
+import {
+  type AllowedStatus,
+  type CapabilityRequirement,
+  type Checker,
+  isPlainObject,
+  type NormalizedAlias,
+  type NormalizedConfig,
+  type Options,
 } from "./config.js";
 import { failure, type ResolveFailure } from "./errors.js";
 
@@ -39,10 +40,6 @@ export function splitSelector(value: string): Selector | ResolveFailure {
     return failure("parse-error", `"${value}" must be fully qualified as "<provider>/<model>"`);
   }
   return { provider: value.slice(0, slash), modelID: value.slice(slash + 1) };
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**
