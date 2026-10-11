@@ -37,6 +37,10 @@ interface FloatingEditor {
  * checked against that snapshot, single resolution per alias, and
  * materialization. No alias feeds another.
  *
+ * The strict preflight only applies while `preflight` is true (during setup's
+ * initial read); afterwards, losing every candidate degrades the alias to the
+ * tolerant path instead of tearing down the whole registration (#55).
+ *
  * Returns report rows built from the SAME resolution results used to
  * materialize; the caller only publishes them if the whole replay (including
  * materialization) succeeded.
@@ -46,7 +50,11 @@ interface ReplayReport {
   explanations: ReadonlyMap<string, ResolutionExplanation>;
 }
 
-function replay(config: NormalizedConfig, editor: FloatingEditor): ReplayReport {
+function replay(
+  config: NormalizedConfig,
+  editor: FloatingEditor,
+  preflight: boolean,
+): ReplayReport {
   const snapshot = editor.list();
 
   // Configuration collision: the alias id already exists as a source model.
@@ -69,7 +77,7 @@ function replay(config: NormalizedConfig, editor: FloatingEditor): ReplayReport 
     result: resolveLatest(snapshot, alias),
   }));
 
-  if (config.strict) {
+  if (preflight && config.strict) {
     const parts: string[] = [];
     for (const { alias, result } of results) {
       if (!result.ok) parts.push(`${sanitize(alias.key)} (${sanitize(result.failure.kind)})`);
@@ -204,7 +212,9 @@ export default Plugin.define({
       try {
         // Single host→adapter boundary: the host DeepMutable degrades strings
         // with brand; here it is adapted to the clean editor view.
-        report = replay(normalized.config, hostEditor as unknown as FloatingEditor);
+        // `initializing` is read live: the initial list() runs the transform
+        // while it is still true, capturing errors for setup's preflight.
+        report = replay(normalized.config, hostEditor as unknown as FloatingEditor, initializing);
       } catch (error) {
         report = null;
         if (initializing && !hasInitialError) {
