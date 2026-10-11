@@ -86,8 +86,8 @@ const conventionalPresetConfig = {
   preset: "conventionalcommits",
   parserOpts: { noteKeywords: BREAKING_NOTE_KEYWORDS },
 };
-// Solo el analizador declara chore(release-1.0) como major: es un marcador de
-// release (1.0 estable), no un cambio de API que deba aparecer en las notas.
+// Only the analyzer treats chore(release-1.0) as major: it marks stable 1.0,
+// not an API change that should appear in the release notes.
 const analyzerPresetConfig = {
   ...conventionalPresetConfig,
   releaseRules: [{ type: "chore", scope: "release-1.0", release: "major" }],
