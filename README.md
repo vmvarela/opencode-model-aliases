@@ -9,14 +9,19 @@ agents keep pointing at last month's model. This [OpenCode](https://opencode.ai)
 adds **floating aliases** to the model catalog: a stable ID such as `opencode/zen-plan` that
 always resolves to the newest model matching your rules.
 
+> **Release status.** Latest published release: **v0.4.0** (2026-10-09). `master` carries
+> unreleased fixes for [#55](https://github.com/vmvarela/opencode-model-aliases/issues/55) and
+> [#56](https://github.com/vmvarela/opencode-model-aliases/issues/56), closing the tracked 1.0
+> milestone work. v1.0 has not shipped; this README documents v0.4.0 and marks unreleased
+> behavior where it differs.
+
 ## Concrete IDs vs aliases
 
-Use a concrete model ID (`github-copilot/claude-sonnet-4.5`) to **pin** one model you want to
-review and change yourself; OpenCode resolves it natively, no plugin needed. An alias earns
-its keep when you mean a **policy**, not a model: "the newest free model with tools and a
-large context", "the current Sonnet, whichever point release it is". The policy outlives the
-model list; the alias keeps resolving to whatever the catalog says satisfies it today, and
-the winner is allowed to move.
+A concrete model ID (`github-copilot/claude-sonnet-4.5`) **pins** one model you review and
+change yourself; OpenCode resolves it natively, no plugin needed. An alias earns its keep
+when you mean a **policy**, not a model: "the newest free model with tools and a large
+context", "the current Sonnet, whichever point release it is". The policy outlives the model
+list; the alias keeps resolving to whatever satisfies it today.
 
 ## Quick start
 
@@ -24,24 +29,22 @@ Add the plugin and one alias to `opencode.json`:
 
 ```json
 {
-  "plugins": [
-    {
-      "package": "opencode-model-aliases@latest",
-      "options": {
-        "aliases": {
-          "github-copilot/claude-sonnet": { "match": "github-copilot/claude-sonnet-*" }
-        }
+  "plugins": [{
+    "package": "opencode-model-aliases@latest",
+    "options": {
+      "aliases": {
+        "github-copilot/claude-sonnet": { "match": "github-copilot/claude-sonnet-*" }
       }
     }
-  ]
+  }]
 }
 ```
 
 Run `/model-aliases` to see what each alias resolved to, then select
 `github-copilot/claude-sonnet` like any other model; requests go to the real winning model.
 
-> OpenCode caches plugin packages. Update with
-> `opencode plugin update opencode-model-aliases@latest`; restarting alone won't.
+> OpenCode caches installed plugin packages: restarting alone doesn't install a newer
+> release. Update with `opencode plugin update opencode-model-aliases@latest`.
 
 ## Examples
 
@@ -64,57 +67,30 @@ as its key: an alias never selects a model from another provider.
 ```json
 "github-copilot/vision": {
   "match": "github-copilot/gemini-*-flash",
-  "filter": {
-    "capabilities": { "tools": true, "input": ["image"], "output": ["text"] },
-    "minContext": 128000
-  }
+  "filter": { "capabilities": { "tools": true, "input": ["image"], "output": ["text"] }, "minContext": 128000 }
 }
 ```
 
-**Pick a model per job**: "the best free model for planning" is a policy, not a model ID.
-Filter the free set by what each job needs, then point agents at the aliases:
+**Pick a model per job**: filter the free set by what each job needs, then point agents at
+the aliases with `"agents": { "plan": { "model": "opencode/zen-plan" }, "build": { "model": "opencode/zen-build" } }`:
 
 ```json
-{
-  "plugins": [{
-    "package": "opencode-model-aliases@latest",
-    "options": {
-      "aliases": {
-        "opencode/zen-plan": {
-          "match": ["opencode/*-free", "opencode/big-pickle"],
-          "filter": { "capabilities": { "tools": true }, "minContext": 256000 },
-          "name": "Zen Free — Plan"
-        },
-        "opencode/zen-build": {
-          "match": ["opencode/*-free", "opencode/big-pickle"],
-          "filter": {
-            "capabilities": { "tools": true, "input": ["text"], "output": ["text"] },
-            "minContext": 64000
-          },
-          "name": "Zen Free — Build"
-        }
-      }
-    }
-  }],
-  "agents": {
-    "plan":  { "model": "opencode/zen-plan" },
-    "build": { "model": "opencode/zen-build" }
-  }
+"opencode/zen-plan": {
+  "match": ["opencode/*-free", "opencode/big-pickle"],
+  "filter": { "capabilities": { "tools": true }, "minContext": 256000 },
+  "name": "Zen Free — Plan"
+},
+"opencode/zen-build": {
+  "match": ["opencode/*-free", "opencode/big-pickle"],
+  "filter": { "capabilities": { "tools": true, "input": ["text"], "output": ["text"] }, "minContext": 64000 },
+  "name": "Zen Free — Build"
 }
 ```
 
 Filters decide **eligibility**, not quality. If several models qualify, the newest wins, so
 both aliases may currently pick the same model. `*-free` is a naming convention, not a price
-check, and free offers can change.
-
-Only `active` models are eligible by default; opt into others explicitly:
-
-```json
-"openai/bleeding-edge": {
-  "match": "openai/gpt-*",
-  "filter": { "status": ["active", "alpha", "beta"] }
-}
-```
+check. Only `active` models are eligible by default; opt into `alpha`/`beta` via
+`filter.status`.
 
 ## How a winner is picked
 
@@ -128,15 +104,14 @@ When the plugin starts and at every catalog refresh, each alias:
    (`gpt-6.1-sol-pro` beats `gpt-6.1-sol-fast`). Models without release dates never win.
 
 Selection is deterministic: same catalog, same rules, same winner. The alias gets a copy of
-the winner's model info under the alias ID; aliases never select other aliases, and
-declaration order doesn't matter.
+the winner's model info under the alias ID; declaration order doesn't matter.
 
 ## Options
 
 | Option | Default | Notes |
 |---|---|---|
 | `aliases` | required | Object of aliases; `{}` is valid. |
-| `strict` | `false` | Fail startup if any alias doesn't resolve; strict applies at startup only. |
+| `strict` | `false` | Fail startup if any alias doesn't resolve. v0.4.0 also fails later catalog refreshes (see Limits); unreleased master keeps it startup-only. |
 | `debug` | `false` | Log each resolution as a `[debug]` warning. |
 | `match` | required | Glob or list of globs: `"provider/pattern"`. |
 | `exclude` | none | Same format as `match`. |
@@ -154,9 +129,9 @@ configuration; the `.jsonc` file is read at plugin start, so restart after editi
 
 For editor autocompletion and shape validation, `schema.json` ships with the package as a
 draft-07 JSON Schema; point the config file's `$schema` at it (file-only metadata: editors
-may require it, the plugin strips it before merging, and inline plugin options never accept
-it). The schema checks shape only — glob compilation, the literal-provider rule and provider
-equality are still enforced by the plugin at runtime, which remains authoritative.
+may require it, the plugin strips it, and inline plugin options never accept it). The schema
+checks shape only — glob compilation, the literal-provider rule and provider equality remain
+runtime-enforced and authoritative.
 
 ```jsonc
 // .opencode/opencode-model-aliases.jsonc — complete example
@@ -178,72 +153,65 @@ equality are still enforced by the plugin at runtime, which remains authoritativ
 Run `/model-aliases` (or **Model aliases** in the command palette) for the current target and
 the real model ID used for requests, with unresolved reasons where a selection failed. Run
 `/model-aliases explain <provider>/<alias-id>` for the full decision: matching patterns,
-rejected candidates with their reasons, and whether the runner-up lost on release date or the
-descending model-ID tie-break. Nothing here calls a model. In OpenCode 2.0.22, selecting the
-slash suggestion leaves a trailing space; press Enter again. Without a TUI:
+rejected candidates with their reasons, and whether the runner-up lost on release date or
+the tie-break. Nothing here calls a model. In OpenCode 2.0.22, selecting the slash
+suggestion leaves a trailing space; press Enter again. Without a TUI:
 
 ```sh
 opencode api --standalone post /api/rpc/opencode-model-aliases/inspect --data '{"input":{}}'
 ```
 
 The backend also exposes [`explain({ alias })`](https://github.com/vmvarela/opencode-model-aliases/issues/24)
-on the same `opencode-model-aliases` RPC.
-Explanation reflects the catalog visible to the plugin's transform; models disabled with
-`disabled: true` are still invisible to it, and in strict mode a startup failure prevents
-the plugin and its RPC from becoming available.
+on the same `opencode-model-aliases` RPC. Explanations reflect the catalog visible to the
+plugin's transform: models hidden with `disabled: true` can still appear there and be
+selected by an alias (see Limits); with `strict: true`, a startup failure prevents the
+plugin and its RPC from becoming available.
 
 **[Change visibility](https://github.com/vmvarela/opencode-model-aliases/issues/38).** The first resolution sets a silent baseline. When an alias later
 changes target, the TUI shows a toast and `/model-aliases` shows the previous target, the
-current target and when the change was detected. Editing an alias's `match` or `filter`
-rules resets its baseline: a changed alias is a config change you should see, not hunt for
-in logs.
+current one and when the change was detected. Editing an alias's `match` or `filter` resets
+its baseline: a changed alias is a config change you should see, not hunt for in logs.
 
-**Plugin ordering — verified facts only.** The plugin resolves against the fresh catalog it
-receives and observes later `model.updated` refreshes from there. Verified behaviors: the
-inspect report is built from a fresh source catalog, and a downstream rewrite of the alias
-`modelID` by another plugin can make the report return `unavailable`, because the rewritten
-catalog no longer matches what the alias materialized. No other multi-plugin ordering
-guarantees are documented; don't rely on plugin execution order.
+**Plugin ordering.** The plugin resolves against the fresh catalog it receives and observes
+later `model.updated` refreshes. The inspect report is built from a fresh source catalog; a
+downstream rewrite of the alias `modelID` by another plugin can make the report return
+`unavailable`. Don't rely on plugin execution order.
 
 ## Limits, failure and non-goals
 
-- Invalid configuration (including unknown keys and invalid globs) fails at startup. Alias/source
-  ID collisions are fatal on every catalog replay, including startup.
+- Invalid configuration (including unknown keys and invalid globs) fails at startup, and
+  alias/source ID collisions are fatal on every catalog replay, including startup.
 - An alias with no candidate logs a warning and is left out; other aliases keep working.
-  With `strict: true`, startup fails instead. Strict applies at startup only: losing all
-  targets afterwards degrades to the tolerant behavior — the alias disappears until a
-  matching model returns.
-- Only the `latest` strategy exists. The plugin can't rank by price or quality.
-- Aliases are provider-isolated and never chain.
-- The plugin only reads OpenCode's catalog; it never fetches external model lists.
+  With `strict: true`, startup fails instead. In **v0.4.0**, strict also fails every later
+  catalog refresh where an alias is unresolved, disabling the plugin until every alias
+  resolves again. **Unreleased master** keeps strict at startup only: after a successful
+  startup, a target loss skips only that alias, and it recovers when a matching model
+  returns (fix for [#55](https://github.com/vmvarela/opencode-model-aliases/issues/55)).
+- Only the `latest` strategy exists; the plugin can't rank by price or quality. Aliases are
+  provider-isolated and never chain, and the plugin only reads OpenCode's catalog — it never
+  fetches external model lists.
 - Models hidden with `disabled: true` in your OpenCode provider config can still be selected
-  by an alias ([#42](https://github.com/vmvarela/opencode-model-aliases/issues/42)). Use
+  by an alias ([#42](https://github.com/vmvarela/opencode-model-aliases/issues/42)); use
   `exclude` to keep a model out of an alias.
 - Compatibility is verified only for OpenCode **2.0.16 and 2.0.24** ([real-host smoke
   tests in CI](.github/workflows/ci.yml), tracked in [#29](https://github.com/vmvarela/opencode-model-aliases/issues/29)); other host versions are not on the verified matrix.
 
 Explicitly out of scope: prompt classification ("which prompt needs which model"), smart
 routing, provider proxying, credential management, retries/failover, billing, and session
-orchestration. Aliases adapt selection as the catalog changes; what happens to a request
-once it leaves the plugin is OpenCode's job.
+orchestration. What happens to a request once it leaves the plugin is OpenCode's job.
 
 ## The 1.0 line
 
-v1.0 means: reliable selection from a valid catalog, config that fails loudly and early,
-changes that are visible without digging through logs, and verified compatibility with the
-host versions above. The `latest` strategy alone is sufficient for that; stability comes
-from determinism and diagnostics, not from more selection policies. Backlog ideas remain
-outside 1.0 scope; no additional selection strategy is required for this release.
+v1.0 means: reliable deterministic selection from a valid catalog, strict config that fails
+loudly and early, changes that are visible without digging through logs, and verified host
+compatibility (OpenCode 2.0.16 and 2.0.24). The `latest` strategy alone suffices; stability
+comes from determinism and diagnostics, not more selection policies. The tracked 1.0 issues
+are closed on `master`; backlog ideas stay outside 1.0 scope.
 
 ## Development
 
-Requires Node.js 22+ and pnpm 11.
-
-```sh
-pnpm install
-pnpm run verify          # lint, typecheck, tests and build
-pnpm run check:release   # offline release checks
-pnpm smoke:opencode      # optional; needs an installed OpenCode v2 CLI
-```
+Requires Node.js 22+ and pnpm 11. Use `pnpm install` then `pnpm run verify` (lint, typecheck,
+tests, build), `pnpm run check:release` for offline release checks, and the optional
+`pnpm smoke:opencode` (needs an installed OpenCode v2 CLI).
 
 MIT License — see [LICENSE](LICENSE).
