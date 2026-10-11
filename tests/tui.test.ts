@@ -75,6 +75,7 @@ interface StrictContextOptions {
 }
 
 const SAMPLE_ROW_ACTIVE: InspectResponseRow = {
+  identity: "github-copilot/sonnet",
   key: "github-copilot/sonnet",
   displayName: "Sonnet (alias)",
   provider: "github-copilot",
@@ -88,6 +89,7 @@ const SAMPLE_ROW_ACTIVE: InspectResponseRow = {
 
 const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
   {
+    identity: "github-copilot/gemini-flash",
     key: "github-copilot/gemini-flash",
     displayName: "Gemini Flash (alias)",
     provider: "github-copilot",
@@ -98,6 +100,7 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
     catalogID: "gemini-2.5-flash",
   },
   {
+    identity: "github-copilot/sonnet",
     key: "github-copilot/sonnet",
     displayName: "Sonnet (alias)",
     provider: "github-copilot",
@@ -109,6 +112,7 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
     wireModelID: "sonnet-4-exec",
   },
   {
+    identity: "openai/gpt-luna",
     key: "openai/gpt-luna",
     displayName: "Custom GPT Luna",
     provider: "openai",
@@ -119,6 +123,7 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
     catalogID: "gpt-4o-mini-2024-07-18",
   },
   {
+    identity: "openai/gpt-sol",
     key: "openai/gpt-sol",
     displayName: "gpt-sol",
     provider: "openai",
@@ -129,6 +134,7 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
     catalogID: "o1-preview",
   },
   {
+    identity: "openai/gpt-terra",
     key: "openai/gpt-terra",
     displayName: "GPT Terra (alias)",
     provider: "openai",
@@ -139,6 +145,7 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
     catalogID: "gpt-4o-2024-11-20",
   },
   {
+    identity: "opencode-go/deepseek-flash",
     key: "opencode-go/deepseek-flash",
     displayName: "DeepSeek Flash (alias)",
     provider: "opencode-go",
@@ -149,6 +156,7 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
     catalogID: "deepseek-v3-flash",
   },
   {
+    identity: "opencode-go/glm-flash",
     key: "opencode-go/glm-flash",
     displayName: "GLM Flash (alias)",
     provider: "opencode-go",
@@ -159,6 +167,7 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
     catalogID: "glm-4-flash",
   },
   {
+    identity: "opencode-go/qwen-flash",
     key: "opencode-go/qwen-flash",
     displayName: "Qwen Flash (alias)",
     provider: "opencode-go",
@@ -652,12 +661,60 @@ describe("TUI dialog navigation: select list and detail view", () => {
     expect(alert?.message).not.toContain("Alias model ID");
   });
 
+  it("selecting either colliding escaped key opens that row's own details (#56)", async () => {
+    // "provider/a\n" and the literal "provider/a\u000a" both display as the
+    // same sanitized key; only the lossless identity tells them apart.
+    const displayedKey = "provider/a\\u000a";
+    const collidingRows: InspectResponseRow[] = [
+      {
+        identity: "provider/a\n",
+        key: displayedKey,
+        displayName: "A (alias)",
+        provider: "provider",
+        alias: "a\\u000a",
+        strategy: "latest",
+        status: "active",
+        target: "target-newline",
+        catalogID: "target-newline",
+      },
+      {
+        identity: "provider/a\\u000a",
+        key: displayedKey,
+        displayName: "A (alias)",
+        provider: "provider",
+        alias: "a\\u000a",
+        strategy: "latest",
+        status: "active",
+        target: "target-literal",
+        catalogID: "target-literal",
+      },
+    ];
+
+    for (const row of collidingRows) {
+      const harness = createStrictContext({
+        inspectHandler: async () => ({ text: "ok", rows: collidingRows }),
+        selectReturnValue: row.identity,
+      });
+      plugin.setup(harness.context);
+      await harness.activeCommands[0]?.run();
+
+      // Both rows are offered, each selectable through its own identity.
+      const values = harness.selectCalls[0]?.options.map((option) => option.value) ?? [];
+      expect(values).toEqual(collidingRows.map((candidate) => candidate.identity));
+      expect(new Set(values).size).toBe(values.length);
+
+      // The selected row's own details open, not the first key match.
+      expect(harness.alerts[0]?.message).toContain(`Target: provider/${row.target}`);
+    }
+  });
+
   it("mantiene el key como valor estable de selección independientemente del displayName", async () => {
     const harness = createStrictContext({
       inspectHandler: async () => ({
         text: "Summary text",
         rows: [
           {
+            identity: "provider-x/custom-slug",
             key: "provider-x/custom-slug",
             displayName: "Ultra Smart Model 5.0",
             provider: "provider-x",
@@ -812,6 +869,7 @@ describe("TUI security, validation, and error boundaries", () => {
           {
             key: "github-copilot/sonnet",
             // missing required displayName
+            identity: "github-copilot/sonnet",
             provider: "github-copilot",
             alias: "sonnet",
             strategy: "latest",
@@ -825,6 +883,21 @@ describe("TUI security, validation, and error boundaries", () => {
           {
             key: "github-copilot/sonnet",
             displayName: 123,
+            identity: "github-copilot/sonnet",
+            provider: "github-copilot",
+            alias: "sonnet",
+            strategy: "latest",
+            status: "active",
+          },
+        ],
+      },
+      {
+        text: "ok",
+        rows: [
+          {
+            // missing required identity (#56)
+            key: "github-copilot/sonnet",
+            displayName: "Sonnet (alias)",
             provider: "github-copilot",
             alias: "sonnet",
             strategy: "latest",
@@ -876,6 +949,7 @@ describe("TUI security, validation, and error boundaries", () => {
           {
             key: "github-copilot/sonnet",
             // missing displayName
+            identity: "github-copilot/sonnet",
             provider: "github-copilot",
             alias: "sonnet",
             strategy: "latest",
@@ -892,6 +966,7 @@ describe("TUI security, validation, and error boundaries", () => {
           {
             key: "github-copilot/sonnet",
             displayName: null,
+            identity: "github-copilot/sonnet",
             provider: "github-copilot",
             alias: "sonnet",
             strategy: "latest",
@@ -908,6 +983,7 @@ describe("TUI security, validation, and error boundaries", () => {
           {
             key: "github-copilot/sonnet",
             displayName: "Sonnet (alias)",
+            identity: "github-copilot/sonnet",
             provider: "github-copilot",
             alias: "sonnet",
             strategy: "latest",
@@ -918,8 +994,24 @@ describe("TUI security, validation, and error boundaries", () => {
     ).toBe(true);
   });
 
+  it("isInspectResponse rejects rows with duplicate identities", () => {
+    expect(
+      isInspectResponse({
+        text: "ok",
+        rows: [SAMPLE_ROW_ACTIVE, { ...SAMPLE_ROW_ACTIVE }],
+      }),
+    ).toBe(false);
+    expect(
+      isInspectResponse({
+        text: "ok",
+        rows: [SAMPLE_ROW_ACTIVE, { ...SAMPLE_ROW_ACTIVE, identity: "github-copilot/other" }],
+      }),
+    ).toBe(true);
+  });
+
   it("formatDetailMessage preserva Alias: {key}, incluye Name: {displayName} y condiciona Alias model ID", () => {
     const withDifferentName: InspectResponseRow = {
+      identity: "anthropic/my-alias",
       key: "anthropic/my-alias",
       displayName: "Claude Sonnet (alias)",
       provider: "anthropic",
@@ -934,6 +1026,7 @@ describe("TUI security, validation, and error boundaries", () => {
     expect(formattedDifferent).toContain("Alias model ID: my-alias");
 
     const withMatchingName: InspectResponseRow = {
+      identity: "anthropic/my-alias",
       key: "anthropic/my-alias",
       displayName: "my-alias",
       provider: "anthropic",
@@ -1045,6 +1138,7 @@ describe("TUI change notifications", () => {
         {
           ...SAMPLE_ROW_ACTIVE,
           key: "github-copilot/other",
+          identity: "github-copilot/other",
           ...(change ? { transition: { ...change, id: "other-id" } } : {}),
         },
       ],
@@ -1088,6 +1182,88 @@ describe("TUI change notifications", () => {
     expect(failure.toasts).toHaveLength(0);
     expect(failure.selectSpy).toHaveBeenCalledTimes(1);
     expect(failure.alerts).toHaveLength(0);
+  });
+
+  it("acknowledges colliding escaped keys independently and does not re-notify siblings (#56)", async () => {
+    const displayedKey = "provider/a\\u000a";
+    const newlineIdentity = "provider/a\n";
+    const literalIdentity = "provider/a\\u000a";
+    const change = (id: string, from: string, to: string) => ({
+      id,
+      from,
+      to,
+      fromWireModelID: from,
+      toWireModelID: to,
+      changedAt: "2026-10-11T00:00:00.000Z",
+    });
+    const rowFor = (target: string, change_: ReturnType<typeof change> | undefined) => ({
+      identity: target === "target-newline" ? newlineIdentity : literalIdentity,
+      key: displayedKey,
+      displayName: "A (alias)",
+      provider: "provider",
+      alias: "a\\u000a",
+      strategy: "latest" as const,
+      status: "active" as const,
+      target,
+      catalogID: target,
+      ...(change_ ? { transition: change_ } : {}),
+    });
+    let rows = [
+      rowFor("target-newline", change("t-a1", "provider/old-a", "provider/new-a")),
+      rowFor("target-literal", change("t-b1", "provider/old-b", "provider/new-b")),
+    ];
+    const response = async () => ({ text: "ok", rows });
+    const shared = new Map<string, { aliases: Record<string, string> }>();
+    const location = { directory: "/project" };
+
+    const first = createStrictContext({
+      inspectHandler: response,
+      location,
+      notificationStorage: shared,
+    });
+    const close = plugin.setup(first.context);
+    // Both unseen transitions are grouped in one toast...
+    await vi.waitFor(() => expect(first.toasts).toHaveLength(1));
+    expect(first.toasts[0]?.message).toContain("provider/old-a → provider/new-a");
+    expect(first.toasts[0]?.message).toContain("provider/old-b → provider/new-b");
+    // ...and acknowledged independently per identity.
+    await vi.waitFor(() => {
+      const persisted = [...shared.values()][0]?.aliases ?? {};
+      expect(persisted[newlineIdentity]).toBe("t-a1");
+      expect(persisted[literalIdentity]).toBe("t-b1");
+    });
+    // A repeated event does not re-notify either alias.
+    first.emitModelUpdate();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(first.toasts).toHaveLength(1);
+    if (typeof close === "function") await close();
+
+    // A restart over the same storage does not re-notify.
+    const restarted = createStrictContext({
+      inspectHandler: response,
+      location,
+      notificationStorage: shared,
+    });
+    const stop = plugin.setup(restarted.context);
+    await vi.waitFor(() => expect(restarted.inspectCalls).toHaveLength(1));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(restarted.toasts).toHaveLength(0);
+
+    // A new transition on one alias does not notify its sibling.
+    rows = [
+      rowFor("target-newline", change("t-a2", "provider/new-a", "provider/newer-a")),
+      rowFor("target-literal", change("t-b1", "provider/old-b", "provider/new-b")),
+    ];
+    restarted.emitModelUpdate();
+    await vi.waitFor(() => expect(restarted.toasts).toHaveLength(1));
+    expect(restarted.toasts[0]?.message).toContain("provider/new-a → provider/newer-a");
+    expect(restarted.toasts[0]?.message).not.toContain("provider/new-b");
+    await vi.waitFor(() => {
+      const persisted = [...shared.values()][0]?.aliases ?? {};
+      expect(persisted[newlineIdentity]).toBe("t-a2");
+      expect(persisted[literalIdentity]).toBe("t-b1");
+    });
+    if (typeof stop === "function") await stop();
   });
 });
 

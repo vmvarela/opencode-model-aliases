@@ -29,6 +29,8 @@ function isInspectRow(value: unknown): value is InspectResponseRow {
   if (typeof value !== "object" || value === null) return false;
   const row = value as Record<string, unknown>;
   if (
+    typeof row.identity !== "string" ||
+    row.identity.length === 0 ||
     typeof row.key !== "string" ||
     typeof row.displayName !== "string" ||
     typeof row.provider !== "string" ||
@@ -52,7 +54,12 @@ export function isInspectResponse(value: unknown): value is InspectResponse {
   if (typeof value !== "object" || value === null) return false;
   const res = value as Record<string, unknown>;
   if (typeof res.text !== "string" || !Array.isArray(res.rows)) return false;
-  return res.rows.every(isInspectRow);
+  if (!res.rows.every(isInspectRow)) return false;
+  // Duplicate identities would make selection ambiguous again: a compliant
+  // backend can never emit them (identity is the row's raw key, unique per
+  // configured alias).
+  const identities = (res.rows as InspectResponseRow[]).map((row) => row.identity);
+  return new Set(identities).size === identities.length;
 }
 
 export function formatDetailMessage(row: InspectResponseRow): string {
@@ -139,9 +146,13 @@ const plugin = {
             clients.set(scope, client);
           }
           const { shown, unsaved, save } = client;
+          // Acknowledgements are keyed by the lossless row identity (#56):
+          // escaped keys are display text, not identities.
           const unseen = response.rows.filter(
             (row) =>
-              row.status === "active" && row.transition && shown.get(row.key) !== row.transition.id,
+              row.status === "active" &&
+              row.transition &&
+              shown.get(row.identity) !== row.transition.id,
           );
           if (unseen.length > 0) {
             const messages = unseen.slice(0, 3).map((row) => {
@@ -161,8 +172,8 @@ const plugin = {
             });
             for (const row of unseen) {
               const id = (row.transition as AliasTransition).id;
-              shown.set(row.key, id);
-              unsaved.set(row.key, id);
+              shown.set(row.identity, id);
+              unsaved.set(row.identity, id);
             }
           }
           // A failed disk write must remain retryable even though the toast
@@ -382,7 +393,8 @@ const plugin = {
               title: row.displayName,
               description,
               ...(footer !== undefined ? { footer } : {}),
-              value: row.key,
+              // Selection value is the lossless identity (#56), never shown.
+              value: row.identity,
             };
           });
 
@@ -396,7 +408,7 @@ const plugin = {
             return;
           }
 
-          const selectedRow = response.rows.find((r) => r.key === selectedKey);
+          const selectedRow = response.rows.find((r) => r.identity === selectedKey);
           if (!selectedRow) {
             return;
           }

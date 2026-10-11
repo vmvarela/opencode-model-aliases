@@ -17,6 +17,11 @@ export type InspectRowStatus = "active" | "inactive" | "unresolved";
  */
 export interface InspectReportRow {
   readonly transition?: AliasTransition;
+  /**
+   * Lossless stable identity: the raw alias key, unique per row. Selection
+   * and acknowledgement key only; NEVER display text.
+   */
+  readonly identity: string;
   readonly key: string;
   readonly provider: string;
   /** Visible name: the configured name kept intact, or the default generated one. */
@@ -134,6 +139,7 @@ export function buildInspectRows(
     if (row.status === "unresolved") {
       return {
         ...transition,
+        identity: row.key,
         key,
         provider: safeProvider,
         displayName: safeDisplayName,
@@ -161,6 +167,7 @@ export function buildInspectRows(
 
     return {
       ...transition,
+      identity: row.key,
       key,
       provider: safeProvider,
       displayName: safeDisplayName,

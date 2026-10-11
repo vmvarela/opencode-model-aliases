@@ -88,6 +88,7 @@ describe("ModelAliasesRpc contract", () => {
           items: {
             type: "object",
             properties: {
+              identity: { type: "string", minLength: 1 },
               key: { type: "string" },
               provider: { type: "string" },
               displayName: { type: "string" },
@@ -114,7 +115,7 @@ describe("ModelAliasesRpc contract", () => {
                 additionalProperties: false,
               },
             },
-            required: ["key", "provider", "displayName", "alias", "strategy", "status"],
+            required: ["key", "identity", "provider", "displayName", "alias", "strategy", "status"],
             additionalProperties: false,
           },
         },
@@ -846,6 +847,7 @@ describe("buildInspectRows structured public primitives", () => {
     const terra = inspectRows.find((r) => r.key === "openai/gpt-terra");
     expect(terra).toEqual({
       key: "openai/gpt-terra",
+      identity: "openai/gpt-terra",
       provider: "openai",
       displayName: "Gpt Terra (alias)",
       alias: "gpt-terra",
@@ -864,6 +866,9 @@ describe("buildInspectRows structured public primitives", () => {
     // No row contains non-serializable objects or credentials
     for (const r of inspectRows) {
       expect(typeof r.key).toBe("string");
+      // Identity is the raw alias key, so pre-#56 acknowledgement storage
+      // (keyed by the control-free key) stays valid.
+      expect(r.identity).toBe(r.key);
       expect(typeof r.provider).toBe("string");
       expect(typeof r.displayName).toBe("string");
       expect(typeof r.alias).toBe("string");
@@ -920,6 +925,42 @@ describe("buildInspectRows structured public primitives", () => {
     ];
     const inspectRows = buildInspectRows(rows, new Set(["anthropic/bad"]));
     expect(inspectRows[0]?.displayName).toBe("Bad\\u001b[31m");
+  });
+
+  it("asigna identidades inyectivas cuando dos keys escapadas colisionan (#56)", () => {
+    // A real newline and the literal "\u000a" text sanitize to the same
+    // displayed key, but their identities must differ.
+    const newlineKey = "provider/a\n";
+    const literalKey = "provider/a\\u000a";
+    const rows: AliasReportRow[] = [
+      {
+        key: newlineKey,
+        strategy: "latest",
+        status: "resolved",
+        displayName: "A (alias)",
+        providerID: "provider",
+        catalogID: "target-newline",
+      },
+      {
+        key: literalKey,
+        strategy: "latest",
+        status: "resolved",
+        displayName: "A (alias)",
+        providerID: "provider",
+        catalogID: "target-literal",
+      },
+    ];
+    const inspectRows = buildInspectRows(rows, new Set([newlineKey, literalKey]));
+    // Both visible keys remain the same escaped display text (unchanged).
+    expect(inspectRows[0]?.key).toBe("provider/a\\u000a");
+    expect(inspectRows[1]?.key).toBe("provider/a\\u000a");
+    expect(inspectRows[0]?.target).toBe("target-newline");
+    expect(inspectRows[1]?.target).toBe("target-literal");
+    // Identity is the raw alias key: distinct per row and lossless, so
+    // selection and acknowledgements stay independent.
+    expect(inspectRows[0]?.identity).toBe(newlineKey);
+    expect(inspectRows[1]?.identity).toBe(literalKey);
+    expect(inspectRows[0]?.identity).not.toBe(inspectRows[1]?.identity);
   });
 
   it("un fallo por requisitos capability/contexto llega a text y rows sin filtrar datos de candidatos", async () => {

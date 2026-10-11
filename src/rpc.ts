@@ -92,6 +92,7 @@ export const ModelAliasesRpc = {
             items: {
               type: "object",
               properties: {
+                identity: { type: "string", minLength: 1 },
                 key: { type: "string" },
                 provider: { type: "string" },
                 displayName: { type: "string" },
@@ -118,7 +119,15 @@ export const ModelAliasesRpc = {
                   additionalProperties: false,
                 },
               },
-              required: ["key", "provider", "displayName", "alias", "strategy", "status"],
+              required: [
+                "key",
+                "identity",
+                "provider",
+                "displayName",
+                "alias",
+                "strategy",
+                "status",
+              ],
               additionalProperties: false,
             },
           },
