@@ -50,39 +50,66 @@ Run `/model-aliases` to see what each alias resolved to, then select
 Each alias key is `<provider>/<alias-id>`. Every pattern must use the same literal provider
 as its key: an alias never selects a model from another provider.
 
-**Follow a family** and **skip previews or a specific model** with `exclude`:
+**Follow a family** and **skip previews or a specific model** with `exclude`, in
+`.opencode/opencode-model-aliases.jsonc`:
 
-```json
-"openai/gpt-sol":  { "match": "openai/gpt-*-sol" },
-"openai/gpt-luna": { "match": "openai/gpt-*-luna" },
-"openai/latest": {
-  "match": ["openai/gpt-*", "openai/o*"],
-  "exclude": ["openai/*-preview", "openai/gpt-6.1-sol-pro"]
+```jsonc
+// .opencode/opencode-model-aliases.jsonc — follow a family
+{
+  "$schema": "https://raw.githubusercontent.com/vmvarela/opencode-model-aliases/master/schema.json",
+  "aliases": {
+    "openai/gpt-sol":  { "match": "openai/gpt-*-sol" },
+    "openai/gpt-luna": { "match": "openai/gpt-*-luna" },
+    "openai/latest": {
+      "match": ["openai/gpt-*", "openai/o*"],
+      "exclude": ["openai/*-preview", "openai/gpt-6.1-sol-pro"]
+    }
+  }
 }
 ```
 
-**Require capabilities** — tools, image input, large context:
+**Require capabilities** — tools, image input, large context — in
+`.opencode/opencode-model-aliases.jsonc`:
 
-```json
-"github-copilot/vision": {
-  "match": "github-copilot/gemini-*-flash",
-  "filter": { "capabilities": { "tools": true, "input": ["image"], "output": ["text"] }, "minContext": 128000 }
+```jsonc
+// .opencode/opencode-model-aliases.jsonc — require capabilities
+{
+  "$schema": "https://raw.githubusercontent.com/vmvarela/opencode-model-aliases/master/schema.json",
+  "aliases": {
+    "github-copilot/vision": {
+      "match": "github-copilot/gemini-*-flash",
+      "filter": { "capabilities": { "tools": true, "input": ["image"], "output": ["text"] }, "minContext": 128000 }
+    }
+  }
 }
 ```
 
-**Pick a model per job**: filter the free set by what each job needs, then point agents at
-the aliases with `"agents": { "plan": { "model": "opencode/zen-plan" }, "build": { "model": "opencode/zen-build" } }`:
+**Pick a model per job** in `opencode.json`: filter the free set by what each job needs,
+then point agents at the aliases:
 
 ```json
-"opencode/zen-plan": {
-  "match": ["opencode/*-free", "opencode/big-pickle"],
-  "filter": { "capabilities": { "tools": true }, "minContext": 256000 },
-  "name": "Zen Free — Plan"
-},
-"opencode/zen-build": {
-  "match": ["opencode/*-free", "opencode/big-pickle"],
-  "filter": { "capabilities": { "tools": true, "input": ["text"], "output": ["text"] }, "minContext": 64000 },
-  "name": "Zen Free — Build"
+{
+  "plugins": [{
+    "package": "opencode-model-aliases@latest",
+    "options": {
+      "aliases": {
+        "opencode/zen-plan": {
+          "match": ["opencode/*-free", "opencode/big-pickle"],
+          "filter": { "capabilities": { "tools": true }, "minContext": 256000 },
+          "name": "Zen Free — Plan"
+        },
+        "opencode/zen-build": {
+          "match": ["opencode/*-free", "opencode/big-pickle"],
+          "filter": { "capabilities": { "tools": true, "input": ["text"], "output": ["text"] }, "minContext": 64000 },
+          "name": "Zen Free — Build"
+        }
+      }
+    }
+  }],
+  "agents": {
+    "plan":  { "model": "opencode/zen-plan" },
+    "build": { "model": "opencode/zen-build" }
+  }
 }
 ```
 

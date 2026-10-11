@@ -34,16 +34,7 @@ function parseJsoncDoc(body: string, source: string): Record<string, unknown> {
   return doc as Record<string, unknown>;
 }
 
-/** Wraps an alias-fragment fence (bare `"<key>": { ... }` entries) into a
- *  complete options document; trailing commas are tolerated. */
-function wrapAliasFragment(body: string, source: string): Record<string, unknown> {
-  return parseJsoncDoc(`{"aliases": {\n${body}\n}}`, source);
-}
-
 function optionsFromJsonExample(body: string, source: string): unknown[] {
-  if (/^\s*"[^"]+"\s*:/u.test(body)) {
-    return [wrapAliasFragment(body, source)];
-  }
   const doc = parseJsoncDoc(body, source);
   if ("plugins" in doc) {
     expect(Array.isArray(doc.plugins), source).toBe(true);
@@ -81,7 +72,7 @@ describe("README examples validate against schema.json", () => {
     }
   });
 
-  it("```json fences are complete options docs, opencode configs or alias fragments — all covered and schema-valid", () => {
+  it("```json fences are complete OpenCode configs or options documents — all covered and schema-valid", () => {
     let covered = 0;
     for (const fence of fences.filter((entry) => entry.lang === "json")) {
       const source = fence.body.slice(0, 60);
@@ -92,6 +83,12 @@ describe("README examples validate against schema.json", () => {
     }
     // No ```json fence is silently skipped.
     expect(covered).toBe(fences.filter((entry) => entry.lang === "json").length);
+  });
+
+  it("rejects bare alias fragments; every example must be a complete document", () => {
+    expect(() =>
+      optionsFromJsonExample('"openai/latest": { "match": "openai/gpt-*" }', "bare fragment"),
+    ).toThrow();
   });
 
   it("rejects malformed complete configs instead of validating recovered parser data", () => {
