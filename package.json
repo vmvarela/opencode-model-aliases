@@ -39,6 +39,7 @@
     "tui.js",
     "dist",
     "schema.json",
+    "images",
     "README.md",
     "LICENSE"
   ],

@@ -185,6 +185,10 @@ and provider equality remain runtime-enforced and authoritative.
 - **Explain resolution**: Run `/model-aliases explain <provider>/<alias-id>` for the full decision trail: matched patterns, rejected candidates with unmet criteria, and tie-breaking details. Quote aliases containing spaces: `/model-aliases explain "<provider>/<alias-id>"`. Nothing here calls a model.
 - **Autocomplete note**: In OpenCode 2.0.22, selecting the slash suggestion leaves a trailing space; press Enter again.
 
+| Alias list (`/model-aliases`) | Resolution explanation (`/model-aliases explain <alias>`) |
+|:---:|:---:|
+| ![OpenCode TUI model alias list dialog](images/model-aliases-list.png) | ![OpenCode TUI model alias resolution explanation dialog](images/model-aliases-explain.png) |
+
 ### Headless / CLI inspection
 
 Query the backend via OpenCode standalone RPC without opening the TUI:
