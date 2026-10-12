@@ -1,0 +1,32 @@
+name: Bug report
+description: Report a problem with opencode-model-aliases
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Expected behavior vs actual behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: The relevant `opencode.json` plugin config (omit credentials/secrets).
+    validations:
+      required: true
+  - type: input
+    id: opencode-version
+    attributes:
+      label: OpenCode version
+      placeholder: e.g. 2.0.24
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: e.g. macOS 15, Debian 12, Windows 11
+    validations:
+      required: true

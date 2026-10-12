@@ -297,6 +297,7 @@ const allowedRoots = [
   "tui.js",
   "dist",
   "schema.json",
+  "images",
   "README.md",
   "LICENSE",
   "package.json",
@@ -312,6 +313,8 @@ for (const required of [
   "dist/index.js",
   "dist/tui.js",
   "schema.json",
+  "images/model-aliases-list.png",
+  "images/model-aliases-explain.png",
   "README.md",
   "LICENSE",
 ]) {
