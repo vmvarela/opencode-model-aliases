@@ -9,6 +9,18 @@
     "type": "git",
     "url": "git+https://github.com/vmvarela/opencode-model-aliases.git"
   },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "model-alias",
+    "model-catalog",
+    "ai",
+    "llm"
+  ],
+  "homepage": "https://github.com/vmvarela/opencode-model-aliases#readme",
+  "bugs": {
+    "url": "https://github.com/vmvarela/opencode-model-aliases/issues"
+  },
   "publishConfig": {
     "access": "public"
   },
