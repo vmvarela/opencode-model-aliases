@@ -9,6 +9,10 @@ agents keep pointing at last month's model. This [OpenCode](https://opencode.ai)
 adds **floating aliases** to the model catalog: a stable ID such as `opencode/zen-plan` that
 always resolves to the newest model matching your rules.
 
+![OpenCode TUI model alias list](images/model-aliases-list.png)
+
+![OpenCode TUI model alias resolution explanation](images/model-aliases-explain.png)
+
 > **Docs vs releases.** This README follows the default branch (`master`), which can be
 > ahead of the published npm package; the
 > [GitHub Releases](https://github.com/vmvarela/opencode-model-aliases/releases) page lists
@@ -162,21 +166,6 @@ draft-07 JSON Schema; point the config file's `$schema` at the default-branch UR
 never accept it). The schema checks shape only — glob compilation, the literal-provider rule
 and provider equality remain runtime-enforced and authoritative.
 
-```jsonc
-// .opencode/opencode-model-aliases.jsonc — complete example
-{
-  "$schema": "https://raw.githubusercontent.com/vmvarela/opencode-model-aliases/master/schema.json",
-  "strict": true,
-  "aliases": {
-    "openai/latest": {
-      "match": ["openai/gpt-*", "openai/o*"],
-      "exclude": ["openai/*-preview"],
-      "filter": { "minContext": 128000 }
-    }
-  }
-}
-```
-
 ## Inspection and commands
 
 ### TUI inspection and explanation
@@ -184,10 +173,6 @@ and provider equality remain runtime-enforced and authoritative.
 - **List aliases**: Run `/model-aliases` (or **Model aliases** in the command palette) to see the current target, the real model ID used for requests, and failure reasons if unresolved.
 - **Explain resolution**: Run `/model-aliases explain <provider>/<alias-id>` for the full decision trail: matched patterns, rejected candidates with unmet criteria, and tie-breaking details. Quote aliases containing spaces: `/model-aliases explain "<provider>/<alias-id>"`. Nothing here calls a model.
 - **Autocomplete note**: In OpenCode 2.0.22, selecting the slash suggestion leaves a trailing space; press Enter again.
-
-| Alias list (`/model-aliases`) | Resolution explanation (`/model-aliases explain <alias>`) |
-|:---:|:---:|
-| ![OpenCode TUI model alias list dialog](images/model-aliases-list.png) | ![OpenCode TUI model alias resolution explanation dialog](images/model-aliases-explain.png) |
 
 ### Headless / CLI inspection
 
@@ -197,8 +182,8 @@ Query the backend via OpenCode standalone RPC without opening the TUI:
 # Inspect all configured aliases
 opencode api --standalone post /api/rpc/opencode-model-aliases/inspect --data '{"input":{}}'
 
-# Explain resolution details for a specific alias
-opencode api --standalone post /api/rpc/opencode-model-aliases/explain --data '{"input":{"alias":"openai/latest"}}'
+# Explain resolution details for the quick-start alias
+opencode api --standalone post /api/rpc/opencode-model-aliases/explain --data '{"input":{"alias":"github-copilot/claude-sonnet"}}'
 ```
 
 Explanations reflect the catalog visible to the plugin transform. With `strict: true`, startup failures prevent the plugin and its RPC methods from registering.
@@ -213,7 +198,7 @@ Explanations reflect the catalog visible to the plugin transform. With `strict: 
 | Symptom | Cause | Solution |
 |---|---|---|
 | Alias fails to resolve | No models match globs or meet capability/context filters | Run `/model-aliases explain <provider>/<alias-id>` to see rejected candidates and unmet requirements. Confirm candidates have valid release timestamps (`time.released`). |
-| Host startup fails | Syntax error, unknown key, or invalid glob pattern | Validate configuration against `schema.json`. Remove unrecognized properties or fix glob syntax. |
+| Host startup fails | Invalid shape, unknown key, or invalid glob pattern | Use `schema.json` to check the configuration shape; glob patterns are checked at startup, so inspect the startup error for invalid patterns. |
 | Configuration changes not applied | Editing `.opencode/opencode-model-aliases.jsonc` | Inline `options` in `opencode.json` reload automatically on save, but file config is read only at startup. Restart OpenCode to reload `.jsonc`. |
 | Package update not taking effect | OpenCode caches installed plugin packages | Run `opencode plugin update opencode-model-aliases@latest` and restart OpenCode. |
 | OpenCode-disabled model selected | Upstream catalog exposes models marked `disabled: true` | The plugin reads the host catalog directly ([#42](https://github.com/vmvarela/opencode-model-aliases/issues/42)). Add unwanted models explicitly to `exclude`. |
@@ -241,8 +226,6 @@ orchestration. What happens to a request once it leaves the plugin is OpenCode's
 
 ## Development
 
-Requires Node.js 22+ and pnpm 11. Use `pnpm install` then `pnpm run verify` (lint, typecheck,
-tests, build), `pnpm run check:release` for offline release checks, and the optional
-`pnpm smoke:opencode` (needs an installed OpenCode v2 CLI).
+See [Contributing](CONTRIBUTING.md) for setup and validation commands.
 
 MIT License — see [LICENSE](LICENSE).
