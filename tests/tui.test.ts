@@ -1,11 +1,15 @@
+import { createHash } from "node:crypto";
 import type { Plugin } from "@opencode/plugin/tui";
 import { describe, expect, it, vi } from "vitest";
+import backendPlugin from "../src/plugin.js";
 import { ModelAliasesRpc } from "../src/rpc.js";
 import plugin, {
   formatDetailMessage,
   type InspectResponseRow,
   isInspectResponse,
 } from "../src/tui.js";
+import { makeTempRoot, removeTempRoot } from "./config-fs.js";
+import { createHarness, sourceModel } from "./harness.js";
 
 interface KeymapCommand {
   id?: string;
@@ -87,6 +91,10 @@ const SAMPLE_ROW_ACTIVE: InspectResponseRow = {
   catalogID: "claude-3-5-sonnet-20241022",
   providerID: "github-copilot",
 };
+
+function notificationStorageKey(scope: string): string {
+  return `notifications-v1.${createHash("sha256").update(scope).digest("hex")}`;
+}
 
 const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
   {
@@ -356,6 +364,11 @@ function createStrictContext(options?: StrictContextOptions) {
     storage: {
       store: (key: string, { initial }: { initial: { aliases: Record<string, string> } }) => {
         if (options?.storageFailure) throw new Error("private storage failure");
+        // Mirrors the native host: the ENTIRE key must satisfy its predicate
+        // (the adapter does not split on "/" before validating).
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(key)) {
+          throw new Error(`Invalid storage segment: ${key}`);
+        }
         const state = notificationStorage.get(key) ?? structuredClone(initial);
         notificationStorage.set(key, state);
         return [
@@ -1332,7 +1345,7 @@ describe("TUI change notifications", () => {
         pluginOptions: { debug: true },
         notificationStorage: new Map([
           [
-            'notifications-v1/["/default/workspace",""]',
+            notificationStorageKey(JSON.stringify(["/default/workspace", ""])),
             { aliases: { "github-copilot/sonnet": "transition-1" } },
           ],
         ]),
@@ -1416,6 +1429,131 @@ describe("TUI change notifications", () => {
       expect(warn).not.toHaveBeenCalled();
     } finally {
       warn.mockRestore();
+    }
+  });
+});
+
+describe("backend→TUI integration over the real inspect RPC", () => {
+  // Calls the actually registered backend inspect handler (never a stub).
+  const realInspect = async (harness: ReturnType<typeof createHarness>) => {
+    const handlers = harness.rpc.handlers.at(-1);
+    if (!handlers || typeof handlers.inspect !== "function") {
+      throw new Error("no backend inspect RPC");
+    }
+    return handlers.inspect({}, {}) as unknown as {
+      rows: Array<{
+        identity: string;
+        status?: string;
+        target?: string;
+        transition?: { id: string; from: string; to: string };
+      }>;
+    };
+  };
+
+  it("baseline confirms target A silently; a backend restart with a changed selection policy toasts A→B exactly once", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let tempRoot: string | undefined;
+    let tuiStop: ReturnType<typeof plugin.setup> | undefined;
+    const disposers: Array<() => Promise<void>> = [];
+    try {
+      tempRoot = makeTempRoot();
+      // History persists in native backend storage across the simulated host
+      // restart; the TUI keeps its own client-local ack store.
+      const backendStorage = new Map<string, unknown>();
+      const sources = [
+        sourceModel({ id: "model-a", providerID: "acme", released: 100 }),
+        sourceModel({ id: "model-b", providerID: "acme", released: 200 }),
+      ];
+
+      // The active backend's registered RPC handlers; the TUI bridge below
+      // always talks to the current one (simulated host restart/re-registration).
+      let currentHarness: ReturnType<typeof createHarness> | undefined;
+      const tui = createStrictContext({
+        defaultLocation: { directory: tempRoot },
+        inspectHandler: async (_input, options) => {
+          if (!currentHarness) throw new Error("no backend inspect RPC");
+          const location = options?.location as { directory?: string } | undefined;
+          if (location?.directory !== tempRoot) {
+            throw new Error("TUI inspect RPC used a different location than the backend");
+          }
+          return realInspect(currentHarness);
+        },
+      });
+
+      // Baseline registration: the selection policy resolves model-a only.
+      const harnessA = createHarness({
+        sources,
+        storage: backendStorage,
+        directory: tempRoot,
+        options: { aliases: { "acme/newest": { match: "acme/model-a" } } },
+      });
+      currentHarness = harnessA;
+      const disposeA = (await backendPlugin.setup(harnessA.ctx)) as () => Promise<void>;
+      disposers.push(disposeA);
+
+      tuiStop = plugin.setup(tui.context);
+      await vi.waitFor(() => expect(tui.inspectCalls).toHaveLength(1));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      // Baseline: target A confirmed without any transition — no toast.
+      expect(tui.ui.toast.show).not.toHaveBeenCalled();
+      const before = await realInspect(harnessA);
+      const rowA = before.rows.find((row) => row.identity === "acme/newest");
+      expect(rowA?.status).toBe("active");
+      expect(rowA?.target).toBe("model-a");
+      expect(rowA?.transition).toBeUndefined();
+
+      // Host restart: the alias selection policy now resolves model-b. The
+      // backend re-registers over the same storage, so history observes A→B.
+      await disposeA();
+      const harnessB = createHarness({
+        sources,
+        storage: backendStorage,
+        directory: tempRoot,
+        options: { aliases: { "acme/newest": { match: "acme/model-b" } } },
+      });
+      currentHarness = harnessB;
+      disposers.push((await backendPlugin.setup(harnessB.ctx)) as () => Promise<void>);
+
+      // The TUI's normal model.updated notification check fetches the new
+      // backend response and toasts the transition exactly once.
+      tui.emitModelUpdate({ directory: tempRoot });
+      await vi.waitFor(() => expect(tui.ui.toast.show).toHaveBeenCalledTimes(1));
+      expect(tui.toasts[0]?.title).toBe("Model aliases changed");
+      expect(tui.toasts[0]?.message).toContain("acme/newest: acme/model-a → acme/model-b");
+
+      const after = await realInspect(harnessB);
+      const transition = after.rows.find((row) => row.identity === "acme/newest")?.transition;
+      expect(transition?.from).toBe("acme/model-a");
+      expect(transition?.to).toBe("acme/model-b");
+
+      // A repeated event does not re-toast: the ack was stored.
+      tui.emitModelUpdate({ directory: tempRoot });
+      await vi.waitFor(() => expect(tui.inspectCalls).toHaveLength(3));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(tui.ui.toast.show).toHaveBeenCalledTimes(1);
+      // The ack key is a valid native storage segment: notifications-v1 plus a
+      // SHA-256 hex digest of the scope, never the raw scope JSON path. The
+      // strict mock above would already have thrown on an invalid segment.
+      const firstEntry = tui.notificationStorage.entries().next();
+      if (firstEntry.done) throw new Error("notification storage is empty");
+      const [key, stored] = firstEntry.value;
+      expect(key).toMatch(/^notifications-v1\.[a-f0-9]{64}$/);
+      // Flat dotted key: contains no slash and satisfies the exact host
+      // predicate over the whole key.
+      expect(key).not.toContain("/");
+      expect(key).toMatch(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/);
+      expect(stored?.aliases["acme/newest"]).toBe(transition?.id);
+    } finally {
+      warn.mockRestore();
+      if (typeof tuiStop === "function") {
+        await tuiStop();
+      }
+      // Backend disposal is idempotent; re-awaited in finally so a failing
+      // assertion still tears down both registrations.
+      for (const dispose of disposers) {
+        if (typeof dispose === "function") await dispose();
+      }
+      if (tempRoot) removeTempRoot(tempRoot);
     }
   });
 });

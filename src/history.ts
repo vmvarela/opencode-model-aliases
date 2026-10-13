@@ -20,7 +20,10 @@ function hash(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
-/** Display names, debug and strict do not change the selection policy. */
+/** Informational hash of the selection policy that confirmed the target.
+ *  Configuration changes never invalidate history because of it: entries are
+ *  identified by alias key and location, and the policy hash is only recorded
+ *  for diagnostics when a new target is confirmed. */
 function policyID(alias: NormalizedAlias): string {
   return hash([
     [...alias.match].sort(),
@@ -56,25 +59,42 @@ export async function createHistory(
   try {
     const saved = await storage.get(storageKey);
     if (isPlainObject(saved) && saved.version === 1 && Array.isArray(saved.aliases)) {
+      let repaired = 0;
       for (const value of saved.aliases) {
+        // A confirmed target survives policy/configuration changes: the alias
+        // key and location identify the entry. Keys no longer configured are
+        // garbage collected (alias deletion, malformed shapes).
         if (
           !isPlainObject(value) ||
           typeof value.key !== "string" ||
           typeof value.policy !== "string" ||
-          policies.get(value.key) !== value.policy ||
-          !isTarget(value.target) ||
-          (value.transition !== undefined && !isAliasTransition(value.transition))
+          !policies.has(value.key) ||
+          !isTarget(value.target)
         )
           continue;
         // Copy only public, validated fields from untrusted JSON.
         const target = value.target;
-        const transition = value.transition as AliasTransition | undefined;
+        // A transition inconsistent with its own target is never served: the
+        // target stays confirmed and only the transition is dropped.
+        const raw = value.transition;
+        let transition: AliasTransition | undefined;
+        let corruptTransition = raw !== undefined;
         if (
-          transition &&
-          (transition.to !== `${target.providerID}/${target.catalogID}` ||
-            transition.toWireModelID !== target.wireModelID)
-        )
-          continue;
+          isAliasTransition(raw) &&
+          raw.to === `${target.providerID}/${target.catalogID}` &&
+          raw.toWireModelID === target.wireModelID
+        ) {
+          transition = {
+            id: raw.id,
+            from: raw.from,
+            to: raw.to,
+            fromWireModelID: raw.fromWireModelID,
+            toWireModelID: raw.toWireModelID,
+            changedAt: raw.changedAt,
+          };
+          corruptTransition = false;
+        }
+        if (corruptTransition) repaired += 1;
         entries.set(value.key, {
           key: value.key,
           policy: value.policy,
@@ -83,21 +103,12 @@ export async function createHistory(
             catalogID: target.catalogID,
             wireModelID: target.wireModelID,
           },
-          ...(transition
-            ? {
-                transition: {
-                  id: transition.id,
-                  from: transition.from,
-                  to: transition.to,
-                  fromWireModelID: transition.fromWireModelID,
-                  toWireModelID: transition.toWireModelID,
-                  changedAt: transition.changedAt,
-                },
-              }
-            : {}),
+          ...(transition ? { transition } : {}),
         });
       }
-      dirty = entries.size !== saved.aliases.length;
+      // Rewritten canonicalized state counts as dirty: dropped rows and
+      // collapsed duplicate keys shrink `entries` below the saved length.
+      dirty = entries.size !== saved.aliases.length || repaired > 0;
     }
   } catch {
     // Persistence is best effort; resolution must work even if storage fails.

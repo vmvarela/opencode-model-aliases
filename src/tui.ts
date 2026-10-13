@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Plugin } from "@opencode/plugin/tui";
 import {
   type CandidateExplanation,
@@ -65,6 +66,15 @@ export function isInspectResponse(value: unknown): value is InspectResponse {
 
 function describeFailure(error: unknown): string {
   return sanitize(error instanceof Error ? error.message : String(error));
+}
+
+// The TUI host validates the entire storage key against
+// /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/ (then appends ".json"), so the key must be
+// flat: no slashes anywhere. The SHA-256 hex digest of the scope JSON keeps
+// the key stable and unique per location/workspace, mirroring the hash
+// pattern history.ts already uses for the selection-policy hash.
+function notificationStorageKey(scope: string): string {
+  return `notifications-v1.${createHash("sha256").update(scope).digest("hex")}`;
 }
 
 export function formatDetailMessage(row: InspectResponseRow): string {
@@ -153,7 +163,7 @@ const plugin = {
           let client = clients.get(scope);
           if (!client) {
             const [saved, save] = context.storage.store<{ aliases: Record<string, string> }>(
-              `notifications-v1/${scope}`,
+              notificationStorageKey(scope),
               { initial: { aliases: {} } },
             );
             client = {
