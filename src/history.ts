@@ -59,7 +59,6 @@ export async function createHistory(
   try {
     const saved = await storage.get(storageKey);
     if (isPlainObject(saved) && saved.version === 1 && Array.isArray(saved.aliases)) {
-      let repaired = 0;
       for (const value of saved.aliases) {
         // A confirmed target survives policy/configuration changes: the alias
         // key and location identify the entry. Keys no longer configured are
@@ -74,27 +73,15 @@ export async function createHistory(
           continue;
         // Copy only public, validated fields from untrusted JSON.
         const target = value.target;
-        // A transition inconsistent with its own target is never served: the
-        // target stays confirmed and only the transition is dropped.
-        const raw = value.transition;
-        let transition: AliasTransition | undefined;
-        let corruptTransition = raw !== undefined;
+        // A transition inconsistent with its own target makes the whole entry
+        // unusable, not just the transition.
         if (
-          isAliasTransition(raw) &&
-          raw.to === `${target.providerID}/${target.catalogID}` &&
-          raw.toWireModelID === target.wireModelID
-        ) {
-          transition = {
-            id: raw.id,
-            from: raw.from,
-            to: raw.to,
-            fromWireModelID: raw.fromWireModelID,
-            toWireModelID: raw.toWireModelID,
-            changedAt: raw.changedAt,
-          };
-          corruptTransition = false;
-        }
-        if (corruptTransition) repaired += 1;
+          value.transition !== undefined &&
+          (!isAliasTransition(value.transition) ||
+            value.transition.to !== `${target.providerID}/${target.catalogID}` ||
+            value.transition.toWireModelID !== target.wireModelID)
+        )
+          continue;
         entries.set(value.key, {
           key: value.key,
           policy: value.policy,
@@ -103,12 +90,23 @@ export async function createHistory(
             catalogID: target.catalogID,
             wireModelID: target.wireModelID,
           },
-          ...(transition ? { transition } : {}),
+          ...(isAliasTransition(value.transition)
+            ? {
+                transition: {
+                  id: value.transition.id,
+                  from: value.transition.from,
+                  to: value.transition.to,
+                  fromWireModelID: value.transition.fromWireModelID,
+                  toWireModelID: value.transition.toWireModelID,
+                  changedAt: value.transition.changedAt,
+                },
+              }
+            : {}),
         });
       }
       // Rewritten canonicalized state counts as dirty: dropped rows and
       // collapsed duplicate keys shrink `entries` below the saved length.
-      dirty = entries.size !== saved.aliases.length || repaired > 0;
+      dirty = entries.size !== saved.aliases.length;
     }
   } catch {
     // Persistence is best effort; resolution must work even if storage fails.

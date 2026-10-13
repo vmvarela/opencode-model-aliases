@@ -206,7 +206,7 @@ describe("confirmed target history", () => {
     expect((await rows(restart))[0]?.transition).toEqual(back);
   });
 
-  it("records filter-induced replacement, preserves the last valid target while unresolved and recovers", async () => {
+  it("records filter-induced replacement and preserves the last valid target through the unresolved interval", async () => {
     const storage = new Map<string, unknown>();
     const wideSource = sourceModel({
       providerID: "p",
@@ -219,7 +219,9 @@ describe("confirmed target history", () => {
       aliases: { "p/latest": { match: "p/model-*", filter: { minContext: 300_000 } } },
     };
     await plugin.setup(harness(storage, [A()]).ctx);
-    // The filter excludes A: still configured, unresolved, last valid target kept.
+    // The filter excludes every candidate: still configured, unresolved, and
+    // no more confirmations in between — the recovery below proves the target
+    // survived only if the unresolved interval preserved it.
     const unresolved = createHarness({
       storage,
       sources: [A()],
@@ -229,12 +231,6 @@ describe("confirmed target history", () => {
     await plugin.setup(unresolved.ctx);
     expect((await rows(unresolved))[0]).toMatchObject({ status: "unresolved" });
     expect((await rows(unresolved))[0]?.transition).toBeUndefined();
-    // Recovery to the same confirmed target stays silent.
-    await plugin.setup(harness(storage, [A()]).ctx);
-    const silent = harness(storage, [A()]);
-    await plugin.setup(silent.ctx);
-    expect((await rows(silent))[0]?.transition).toBeUndefined();
-    // Recovery over the preserved target: the unresolved interval never reset it.
     const eligible = createHarness({
       storage,
       sources: [A(), wideSource],
