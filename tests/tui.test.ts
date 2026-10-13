@@ -58,6 +58,7 @@ interface ConfirmCall {
 }
 
 interface StrictContextOptions {
+  pluginOptions?: Record<string, unknown>;
   notificationStorage?: Map<string, { aliases: Record<string, string> }>;
   storageFailure?: boolean;
   saveNotification?: () => Promise<void>;
@@ -341,7 +342,7 @@ function createStrictContext(options?: StrictContextOptions) {
   };
 
   const context: Record<string, unknown> = {
-    options: {},
+    options: options?.pluginOptions ?? {},
     location: options?.location,
     app: { version: "2.0.22", channel: "stable" },
     renderer: {},
@@ -1264,6 +1265,158 @@ describe("TUI change notifications", () => {
       expect(persisted[literalIdentity]).toBe("t-b1");
     });
     if (typeof stop === "function") await stop();
+  });
+
+  it("diagnostics: logs suppression and failure reasons only under debug", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // RPC failure lands in the swallowed notify catch.
+      const failing = createStrictContext({
+        pluginOptions: { debug: true },
+        inspectHandler: async () => {
+          throw new Error("rpc unavailable");
+        },
+      });
+      plugin.setup(failing.context);
+      await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+      expect(warn).toHaveBeenCalledWith(
+        "[opencode-model-aliases] [debug] notification check failed: rpc unavailable",
+      );
+      warn.mockClear();
+
+      // Malformed response is discarded silently for the user.
+      const malformed = createStrictContext({
+        pluginOptions: { debug: true },
+        inspectHandler: async () => ({ text: "ok", rows: "not-an-array" }),
+      });
+      plugin.setup(malformed.context);
+      await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+      expect(warn).toHaveBeenCalledWith(
+        "[opencode-model-aliases] [debug] discarded inspect response: malformed payload",
+      );
+      warn.mockClear();
+
+      // Location changed while awaiting RPC.
+      let reply!: (value: unknown) => void;
+      const moved = createStrictContext({
+        pluginOptions: { debug: true },
+        inspectHandler: () =>
+          new Promise((resolve) => {
+            reply = resolve;
+          }),
+      });
+      plugin.setup(moved.context);
+      await vi.waitFor(() => expect(moved.inspectCalls).toHaveLength(1));
+      moved.defaultLocationSpy.mockReturnValue({ directory: "/different-project" });
+      reply({ text: "ok", rows: [{ ...SAMPLE_ROW_ACTIVE, transition: transition() }] });
+      await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+      expect(warn).toHaveBeenCalledWith(
+        "[opencode-model-aliases] [debug] discarded inspect response: active location changed while awaiting RPC",
+      );
+      warn.mockClear();
+
+      // Storage store creation failure also reaches the notify catch.
+      const storage = createStrictContext({
+        pluginOptions: { debug: true },
+        storageFailure: true,
+      });
+      plugin.setup(storage.context);
+      await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+      expect(warn).toHaveBeenCalledWith(
+        "[opencode-model-aliases] [debug] notification check failed: private storage failure",
+      );
+      warn.mockClear();
+
+      // Already-acknowledged transition suppresses the toast, naming the key.
+      const acked = createStrictContext({
+        pluginOptions: { debug: true },
+        notificationStorage: new Map([
+          [
+            'notifications-v1/["/default/workspace",""]',
+            { aliases: { "github-copilot/sonnet": "transition-1" } },
+          ],
+        ]),
+        inspectHandler: async () => ({
+          text: "ok",
+          rows: [{ ...SAMPLE_ROW_ACTIVE, transition: transition() }],
+        }),
+      });
+      plugin.setup(acked.context);
+      await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+      expect(warn).toHaveBeenCalledWith(
+        "[opencode-model-aliases] [debug] no notification: 1 acknowledged (github-copilot/sonnet), 0 active without transition, 0 not active",
+      );
+      expect(acked.toasts).toHaveLength(0);
+      warn.mockClear();
+
+      // Active row without a transition.
+      const noChange = createStrictContext({
+        pluginOptions: { debug: true },
+        inspectHandler: async () => ({ text: "ok", rows: [SAMPLE_ROW_ACTIVE] }),
+      });
+      plugin.setup(noChange.context);
+      await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+      expect(warn).toHaveBeenCalledWith(
+        "[opencode-model-aliases] [debug] no notification: 0 acknowledged (), 1 active without transition, 0 not active",
+      );
+      warn.mockClear();
+
+      // Inactive rows never notify.
+      const inactive = createStrictContext({
+        pluginOptions: { debug: true },
+        inspectHandler: async () => ({
+          text: "ok",
+          rows: [{ ...SAMPLE_ROW_ACTIVE, status: "inactive", transition: transition() }],
+        }),
+      });
+      plugin.setup(inactive.context);
+      await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+      expect(warn).toHaveBeenCalledWith(
+        "[opencode-model-aliases] [debug] no notification: 0 acknowledged (), 0 active without transition, 1 not active",
+      );
+      warn.mockClear();
+
+      // A toast is issued for unseen transitions, keys listed before show.
+      const shown = createStrictContext({
+        pluginOptions: { debug: true },
+        inspectHandler: async () => ({
+          text: "ok",
+          rows: [{ ...SAMPLE_ROW_ACTIVE, transition: transition() }],
+        }),
+      });
+      plugin.setup(shown.context);
+      await vi.waitFor(() => expect(shown.toasts).toHaveLength(1));
+      expect(warn).toHaveBeenCalledWith(
+        "[opencode-model-aliases] [debug] showing toast: github-copilot/sonnet",
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("diagnostics: stays silent when debug is not enabled", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const failing = createStrictContext({
+        inspectHandler: async () => {
+          throw new Error("rpc unavailable");
+        },
+      });
+      plugin.setup(failing.context);
+      await vi.waitFor(() => expect(failing.inspectCalls).toHaveLength(1));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      const malformed = createStrictContext({
+        inspectHandler: async () => ({ text: "ok", rows: "not-an-array" }),
+      });
+      plugin.setup(malformed.context);
+      await vi.waitFor(() => expect(malformed.inspectCalls).toHaveLength(1));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

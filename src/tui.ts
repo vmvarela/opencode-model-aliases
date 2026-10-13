@@ -6,13 +6,14 @@ import {
   formatExplanationOverview,
   isExplainResponse,
 } from "./explain.js";
-import type { InspectReportRow } from "./report.js";
+import { type InspectReportRow, sanitize } from "./report.js";
 import { ModelAliasesRpc } from "./rpc.js";
 import { type AliasTransition, isAliasTransition } from "./transition.js";
 
 const COMMAND_ID = "opencode-model-aliases.inspect";
 const COMMAND_TITLE = "Model aliases";
 const SLASH_COMMAND_NAME = "model-aliases";
+const LOG_PREFIX = "[opencode-model-aliases]";
 
 const USAGE_MESSAGE =
   'Unexpected arguments. Use /model-aliases or /model-aliases explain <provider/alias>. Quote the alias if it contains spaces: /model-aliases explain "<provider/alias>".';
@@ -62,6 +63,10 @@ export function isInspectResponse(value: unknown): value is InspectResponse {
   return new Set(identities).size === identities.length;
 }
 
+function describeFailure(error: unknown): string {
+  return sanitize(error instanceof Error ? error.message : String(error));
+}
+
 export function formatDetailMessage(row: InspectResponseRow): string {
   const lines: string[] = [`Alias: ${row.key}`, `Name: ${row.displayName}`];
 
@@ -105,6 +110,13 @@ export function formatDetailMessage(row: InspectResponseRow): string {
 const plugin = {
   id: "opencode-model-aliases",
   setup(context) {
+    // Same opt-in as the server plugin's `debug` option. The TUI host swallows
+    // console.debug/console.log from plugins, so diagnosis goes through
+    // console.warn with a [debug] prefix.
+    const debugEnabled = context.options?.debug === true;
+    const debugLog = (message: string) => {
+      if (debugEnabled) console.warn(`${LOG_PREFIX} [debug] ${message}`);
+    };
     let stopped = false;
     let pending = Promise.resolve();
     // Snapshot durable acknowledgments into client-local memory. The native
@@ -124,13 +136,19 @@ const plugin = {
           if (stopped) return;
           const location = context.location ?? context.data.location.default();
           const response = await context.client.rpc(ModelAliasesRpc).inspect({}, { location });
-          if (stopped || !isInspectResponse(response)) return;
+          if (stopped) return;
+          if (!isInspectResponse(response)) {
+            debugLog("discarded inspect response: malformed payload");
+            return;
+          }
           const currentLocation = context.location ?? context.data.location.default();
           if (
             location?.directory !== currentLocation?.directory ||
             location?.workspaceID !== currentLocation?.workspaceID
-          )
+          ) {
+            debugLog("discarded inspect response: active location changed while awaiting RPC");
             return;
+          }
           const scope = JSON.stringify([location?.directory ?? "", location?.workspaceID ?? ""]);
           let client = clients.get(scope);
           if (!client) {
@@ -154,6 +172,20 @@ const plugin = {
               row.transition &&
               shown.get(row.identity) !== row.transition.id,
           );
+          if (debugEnabled && unseen.length === 0) {
+            const acknowledged: string[] = [];
+            let withoutTransition = 0;
+            let notActive = 0;
+            for (const row of response.rows) {
+              if (row.status !== "active") notActive += 1;
+              else if (!row.transition) withoutTransition += 1;
+              else acknowledged.push(row.key);
+            }
+            debugLog(
+              `no notification: ${acknowledged.length} acknowledged (${acknowledged.join(", ")})` +
+                `, ${withoutTransition} active without transition, ${notActive} not active`,
+            );
+          }
           if (unseen.length > 0) {
             const messages = unseen.slice(0, 3).map((row) => {
               const change = row.transition as AliasTransition;
@@ -164,6 +196,7 @@ const plugin = {
               return `${row.key}: ${change.from} → ${change.to}${wire}`;
             });
             if (unseen.length > 3) messages.push(`+${unseen.length - 3} more changes`);
+            debugLog(`showing toast: ${unseen.map((row) => row.key).join(", ")}`);
             context.ui.toast.show({
               title: "Model aliases changed",
               message: `${messages.join("\n")}\nSee /model-aliases for details.`,
@@ -185,9 +218,10 @@ const plugin = {
             unsaved.clear();
           }
         })
-        .catch(() => {
+        .catch((error) => {
           // Notifications are optional; RPC/storage failures do not open dialogs
           // or break the manual inspection command.
+          debugLog(`notification check failed: ${describeFailure(error)}`);
         });
       return pending;
     };
