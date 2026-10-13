@@ -22,9 +22,11 @@
  * 3. A separate downstream consumer plugin (temp root package, `main:
  *    index.js`, loaded after the product) reads `ctx.model.list()` and
  *    asserts the host catalog state: `localfake/latest` selectable,
- *    `enabled=true`, execution `modelID=fake-large`. It emits a public-field
- *    sentinel via `console.warn` on success and throws otherwise, so a
- *    silently skipped product cannot pass on wire-model evidence alone.
+ *    `enabled=true`, execution `modelID` equal to the expected target it
+ *    gets injected through its plugin entry `options` (`expectedTarget`).
+ *    It emits a public-field sentinel via `console.warn` on success and
+ *    throws otherwise, so a silently skipped product cannot pass on
+ *    wire-model evidence alone.
  * 4. Runs `opencode run --standalone --model localfake/latest --format json
  *    --print-logs` under a bounded timeout that kills the whole child process
  *    group, and asserts: exit 0; a genuine assistant `text` stdout event with
@@ -43,6 +45,14 @@
  *    and ZERO provider requests observed by the loopback sink (inspection
  *    performs no model call and no session execution).
  *
+ *    After the baseline, the inspect mode proves the change-visibility
+ *    contract with a series of fresh standalone hosts under the SAME
+ *    isolated HOME/location/storage: a selection-policy config edit (an
+ *    `exclude` of the incumbent winner) flips the target A→B with a
+ *    transition; an unedited restart and a further policy edit whose
+ *    winner stays B both preserve the existing transition ID; reverting
+ *    the policy changes target B→A with a NEW transition.
+ *
  * Isolation: `HOME` and all XDG dirs are unique temp directories created
  * before the version probe; the CLI subprocesses get a minimal allow-listed
  * environment (no `process.env` spread) — only PATH/HOME/TMPDIR, isolated
@@ -52,7 +62,7 @@
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -63,6 +73,7 @@ const PLUGIN_ID = "opencode-model-aliases";
 const PROVIDER = "localfake";
 const ALIAS_KEY = "localfake/latest";
 const TARGET = "fake-large";
+const TARGET_B = "fake-small";
 const DUMMY_KEY = "smoke-dummy-key-not-a-credential";
 const CLI_TIMEOUT_MS = 120_000;
 const STEP_TIMEOUT_MS = 120_000;
@@ -354,6 +365,9 @@ async function main() {
       `export default {\n` +
         `  id: "smoke-catalog-consumer",\n` +
         `  async setup(ctx) {\n` +
+        `    // The expected target varies per phase; the host injects it via the\n` +
+        `    // plugin entry options. The default matches the catalog baseline.\n` +
+        `    const expectedTarget = ctx.options?.expectedTarget ?? "fake-large";\n` +
         `    const { data } = await ctx.model.list();\n` +
         `    if (!Array.isArray(data)) throw new Error("smoke-catalog-consumer: ctx.model.list() returned no model array");\n` +
         `    const alias = data.find((m) => m.providerID === "localfake" && m.id === "latest");\n` +
@@ -362,8 +376,8 @@ async function main() {
         `      throw new Error("smoke-catalog-consumer: localfake/latest not selectable; providers seen: " + seen);\n` +
         `    }\n` +
         `    if (alias.enabled !== true) throw new Error("smoke-catalog-consumer: localfake/latest is not enabled");\n` +
-        `    if (alias.modelID !== "fake-large") throw new Error("smoke-catalog-consumer: localfake/latest execution modelID is " + alias.modelID + ", expected fake-large");\n` +
-        `    console.warn("smoke-catalog-consumer: catalog OK providerID=localfake id=latest enabled=true modelID=fake-large");\n` +
+        `    if (alias.modelID !== expectedTarget) throw new Error("smoke-catalog-consumer: localfake/latest execution modelID is " + alias.modelID + ", expected " + expectedTarget);\n` +
+        `    console.warn("smoke-catalog-consumer: catalog OK providerID=localfake id=latest enabled=true modelID=" + expectedTarget);\n` +
         `    return () => {};\n` +
         `  },\n` +
         `};\n`,
@@ -373,54 +387,74 @@ async function main() {
     await mkdir(project, { recursive: true });
     // Plugin config ONLY in a separate JSONC file (comments + trailing
     // commas): the native plugin entry carries no options and the file must
-    // be found by walking up from the project cwd.
+    // be found by walking up from the project cwd. Rewritable per phase:
+    // every history probe runs a fresh standalone host, so an edited file
+    // is read from scratch at plugin start.
     const pluginConfigDir = path.join(project, ".opencode");
     await mkdir(pluginConfigDir, { recursive: true });
-    await writeFile(
-      path.join(pluginConfigDir, "opencode-model-aliases.jsonc"),
-      [
-        "// Plugin configuration (JSONC): comments and trailing commas allowed.",
-        "{",
-        `  "aliases": {`,
-        `    // The alias materializes the latest winner of the fake-* models.`,
-        `    "${ALIAS_KEY}": {`,
-        `      "match": "${PROVIDER}/fake-*",`,
-        `      "select": { "strategy": "latest" },`,
-        `    },`,
-        `  },`,
-        `  "strict": true,`,
-        `  "debug": true,`,
-        `}`,
-        ``,
-      ].join("\n"),
-      "utf8",
-    );
-    await writeFile(
-      path.join(project, "opencode.json"),
-      JSON.stringify(
-        {
-          $schema: "https://opencode.ai/config.json",
-          share: "disabled",
-          autoupdate: false,
-          model: ALIAS_KEY,
-          plugins: [
-            // No options: all configuration comes from the JSONC file.
-            { package: pkgDir },
-            { package: consumerDir, options: {} },
-          ],
-          providers: {
-            [PROVIDER]: {
-              name: "LocalFake",
-              package: "@ai-sdk/openai-compatible",
-              env: ["LOCALFAKE_API_KEY"],
-              options: { apiKey: DUMMY_KEY, baseURL: endpoint },
+    const policyFile = path.join(pluginConfigDir, "opencode-model-aliases.jsonc");
+    const writePolicy = async (exclude) => {
+      await writeFile(
+        policyFile,
+        [
+          "// Plugin configuration (JSONC): comments and trailing commas allowed.",
+          "{",
+          `  "aliases": {`,
+          `    // The alias materializes the latest winner of the fake-* models.`,
+          `    "${ALIAS_KEY}": {`,
+          `      "match": "${PROVIDER}/fake-*",`,
+          ...(exclude.length
+            ? [
+                `      // Selection policy under test: excluding this candidate set`,
+                `      // changes the effective winner.`,
+                `      "exclude": [${exclude.map((glob) => JSON.stringify(glob)).join(", ")}],`,
+              ]
+            : []),
+          `      "select": { "strategy": "latest" },`,
+          `    },`,
+          `  },`,
+          `  "strict": true,`,
+          `  "debug": true,`,
+          `}`,
+          ``,
+        ].join("\n"),
+        "utf8",
+      );
+    };
+    await writePolicy([]);
+    const jsonConfigFile = path.join(project, "opencode.json");
+    // Rewritable per phase: the consumer's expected alias target is injected
+    // through its plugin entry options so the assertion can follow the
+    // policy under test.
+    const writeOpenCodeConfig = async (expectedTarget) => {
+      await writeFile(
+        jsonConfigFile,
+        JSON.stringify(
+          {
+            $schema: "https://opencode.ai/config.json",
+            share: "disabled",
+            autoupdate: false,
+            model: ALIAS_KEY,
+            plugins: [
+              // No options: all configuration comes from the JSONC file.
+              { package: pkgDir },
+              { package: consumerDir, options: { expectedTarget } },
+            ],
+            providers: {
+              [PROVIDER]: {
+                name: "LocalFake",
+                package: "@ai-sdk/openai-compatible",
+                env: ["LOCALFAKE_API_KEY"],
+                options: { apiKey: DUMMY_KEY, baseURL: endpoint },
+              },
             },
           },
-        },
-        null,
-        2,
-      ),
-    );
+          null,
+          2,
+        ),
+      );
+    };
+    await writeOpenCodeConfig(TARGET);
 
     await writeFile(
       path.join(dir, "models.json"),
@@ -597,23 +631,19 @@ async function main() {
         const baseline = reportRows.find((row) => row.key === ALIAS_KEY);
         if (baseline.transition !== undefined)
           problems.push("first resolution produced a false transition");
-        // Restart two standalone hosts under the same isolated HOME/location.
-        // Changing release metadata makes fake-small win without changing policy.
-        const catalog = JSON.parse(await readFile(path.join(dir, "models.json"), "utf8"));
-        catalog[PROVIDER].models["fake-small"].release_date = "2026-01-01";
-        await writeFile(path.join(dir, "models.json"), JSON.stringify(catalog));
-        const consumerFile = path.join(consumerDir, "index.js");
-        await writeFile(
-          consumerFile,
-          (await readFile(consumerFile, "utf8")).replaceAll("fake-large", "fake-small"),
-        );
-        let transitionID;
-        for (let restart = 0; restart < 2; restart++) {
+        // Change-visibility contract, one fresh standalone host per phase
+        // under the SAME isolated HOME/location/storage: a selection-policy
+        // config edit flips the target A→B with a transition; an unedited
+        // restart and a further policy edit whose winner stays B preserve
+        // the existing transition ID; reverting the policy changes the
+        // target B→A with a NEW transition.
+        const probeHistory = async (label, expectedTarget) => {
           const result = await runSpawn(
             "opencode",
             [
               "api",
               "--standalone",
+              "--print-logs",
               "post",
               "/api/rpc/opencode-model-aliases/inspect",
               "--data",
@@ -622,31 +652,98 @@ async function main() {
             { cwd: project, env, timeoutMs: CLI_TIMEOUT_MS },
           );
           if (result.code !== 0 || result.timedOut || result.spawnError) {
-            problems.push(`history restart ${restart} failed: ${result.stderr.slice(-1500)}`);
-            continue;
+            problems.push(`history probe ${label} failed: ${result.stderr.slice(-1500)}`);
+            return null;
+          }
+          if (/failed to load plugin/.test(result.stderr)) {
+            problems.push(`history probe ${label}: host logged "failed to load plugin"`);
+          }
+          const sentinel = `smoke-catalog-consumer: catalog OK providerID=${PROVIDER} id=latest enabled=true modelID=${expectedTarget}`;
+          if (!result.stderr.includes(sentinel)) {
+            problems.push(
+              `history probe ${label}: stderr did not contain the consumer sentinel "${sentinel}"`,
+            );
           }
           let row;
           try {
             row = JSON.parse(result.stdout).output.rows.find((value) => value.key === ALIAS_KEY);
           } catch {}
+          return row;
+        };
+        const checkTransition = (label, row, expectedTarget, from, to, knownID) => {
           const change = row?.transition;
+          const target = row?.target ?? row?.catalogID;
+          const idOK =
+            knownID === undefined
+              ? typeof change?.id === "string" &&
+                change.id.length > 0 &&
+                Number.isFinite(Date.parse(change?.changedAt ?? ""))
+              : change?.id === knownID;
           if (
             row?.status !== "active" ||
-            row?.target !== "fake-small" ||
-            change?.from !== `${PROVIDER}/fake-large` ||
-            change?.to !== `${PROVIDER}/fake-small` ||
-            !Number.isFinite(Date.parse(change?.changedAt ?? ""))
+            target !== expectedTarget ||
+            change?.from !== from ||
+            change?.to !== to ||
+            !idOK
           ) {
             problems.push(
-              `history restart ${restart} did not preserve confirmed A → B: ${JSON.stringify(row)}`,
+              `history probe ${label} did not confirm ${from} → ${to}${
+                knownID !== undefined ? " with the same transition ID" : ""
+              }: ${JSON.stringify(row)}`,
             );
           }
-          if (restart === 0) transitionID = change?.id;
-          else if (!transitionID || change?.id !== transitionID)
-            problems.push("unchanged restart repeated the transition");
-        }
+          return change?.id;
+        };
+
+        // A → B: excluding the incumbent winner fake-large leaves fake-small
+        // as the only eligible candidate, so the policy edit alone flips the
+        // effective target in an unchanged catalog.
+        await writeOpenCodeConfig(TARGET_B);
+        await writePolicy([`${PROVIDER}/${TARGET}`]);
+        const abID = checkTransition(
+          "policy edit A→B",
+          await probeHistory("policy edit A→B", TARGET_B),
+          TARGET_B,
+          `${PROVIDER}/${TARGET}`,
+          `${PROVIDER}/${TARGET_B}`,
+        );
+        // Unedited restart under the same policy: the same notice serves
+        // again, so the transition identity is preserved exactly.
+        checkTransition(
+          "unchanged restart",
+          await probeHistory("unchanged restart", TARGET_B),
+          TARGET_B,
+          `${PROVIDER}/${TARGET}`,
+          `${PROVIDER}/${TARGET_B}`,
+          abID,
+        );
+        // A further policy edit whose winner stays B (the added pattern
+        // never matches): cosmetic for the confirmed target, no new notice.
+        await writePolicy([`${PROVIDER}/${TARGET}`, `${PROVIDER}/none-*`]);
+        checkTransition(
+          "winner-stays-B edit",
+          await probeHistory("winner-stays-B edit", TARGET_B),
+          TARGET_B,
+          `${PROVIDER}/${TARGET}`,
+          `${PROVIDER}/${TARGET_B}`,
+          abID,
+        );
+        // Reverting the policy restores A with a NEW transition. The consumer
+        // expectation is restored to A as well: it must assert the target the
+        // reverted policy actually produces.
+        await writeOpenCodeConfig(TARGET);
+        await writePolicy([]);
+        const baID = checkTransition(
+          "revert B→A",
+          await probeHistory("revert B→A", TARGET),
+          TARGET,
+          `${PROVIDER}/${TARGET_B}`,
+          `${PROVIDER}/${TARGET}`,
+        );
+        if (abID === undefined) problems.push("policy edit A→B produced no transition ID");
+        else if (baID === abID) problems.push("revert B→A reused the previous transition ID");
         console.log(
-          "smoke:opencode: native storage and transition identity verified across restarts.",
+          "smoke:opencode: native storage and the policy-edit transition contract verified across standalone hosts.",
         );
       }
 

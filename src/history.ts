@@ -20,7 +20,10 @@ function hash(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
-/** Display names, debug and strict do not change the selection policy. */
+/** Informational hash of the selection policy that confirmed the target.
+ *  Configuration changes never invalidate history because of it: entries are
+ *  identified by alias key and location, and the policy hash is only recorded
+ *  for diagnostics when a new target is confirmed. */
 function policyID(alias: NormalizedAlias): string {
   return hash([
     [...alias.match].sort(),
@@ -57,22 +60,26 @@ export async function createHistory(
     const saved = await storage.get(storageKey);
     if (isPlainObject(saved) && saved.version === 1 && Array.isArray(saved.aliases)) {
       for (const value of saved.aliases) {
+        // A confirmed target survives policy/configuration changes: the alias
+        // key and location identify the entry. Keys no longer configured are
+        // garbage collected (alias deletion, malformed shapes).
         if (
           !isPlainObject(value) ||
           typeof value.key !== "string" ||
           typeof value.policy !== "string" ||
-          policies.get(value.key) !== value.policy ||
-          !isTarget(value.target) ||
-          (value.transition !== undefined && !isAliasTransition(value.transition))
+          !policies.has(value.key) ||
+          !isTarget(value.target)
         )
           continue;
         // Copy only public, validated fields from untrusted JSON.
         const target = value.target;
-        const transition = value.transition as AliasTransition | undefined;
+        // A transition inconsistent with its own target makes the whole entry
+        // unusable, not just the transition.
         if (
-          transition &&
-          (transition.to !== `${target.providerID}/${target.catalogID}` ||
-            transition.toWireModelID !== target.wireModelID)
+          value.transition !== undefined &&
+          (!isAliasTransition(value.transition) ||
+            value.transition.to !== `${target.providerID}/${target.catalogID}` ||
+            value.transition.toWireModelID !== target.wireModelID)
         )
           continue;
         entries.set(value.key, {
@@ -83,20 +90,22 @@ export async function createHistory(
             catalogID: target.catalogID,
             wireModelID: target.wireModelID,
           },
-          ...(transition
+          ...(isAliasTransition(value.transition)
             ? {
                 transition: {
-                  id: transition.id,
-                  from: transition.from,
-                  to: transition.to,
-                  fromWireModelID: transition.fromWireModelID,
-                  toWireModelID: transition.toWireModelID,
-                  changedAt: transition.changedAt,
+                  id: value.transition.id,
+                  from: value.transition.from,
+                  to: value.transition.to,
+                  fromWireModelID: value.transition.fromWireModelID,
+                  toWireModelID: value.transition.toWireModelID,
+                  changedAt: value.transition.changedAt,
                 },
               }
             : {}),
         });
       }
+      // Rewritten canonicalized state counts as dirty: dropped rows and
+      // collapsed duplicate keys shrink `entries` below the saved length.
       dirty = entries.size !== saved.aliases.length;
     }
   } catch {

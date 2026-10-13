@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Plugin } from "@opencode/plugin/tui";
 import {
   type CandidateExplanation,
@@ -62,6 +63,15 @@ export function isInspectResponse(value: unknown): value is InspectResponse {
   return new Set(identities).size === identities.length;
 }
 
+// The TUI host validates the entire storage key against
+// /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/ (then appends ".json"), so the key must be
+// flat: no slashes anywhere. The SHA-256 hex digest of the scope JSON keeps
+// the key stable and unique per location/workspace, mirroring the hash
+// pattern history.ts already uses for the selection-policy hash.
+function notificationStorageKey(scope: string): string {
+  return `notifications-v1.${createHash("sha256").update(scope).digest("hex")}`;
+}
+
 export function formatDetailMessage(row: InspectResponseRow): string {
   const lines: string[] = [`Alias: ${row.key}`, `Name: ${row.displayName}`];
 
@@ -124,18 +134,22 @@ const plugin = {
           if (stopped) return;
           const location = context.location ?? context.data.location.default();
           const response = await context.client.rpc(ModelAliasesRpc).inspect({}, { location });
-          if (stopped || !isInspectResponse(response)) return;
+          if (stopped) return;
+          if (!isInspectResponse(response)) {
+            return;
+          }
           const currentLocation = context.location ?? context.data.location.default();
           if (
             location?.directory !== currentLocation?.directory ||
             location?.workspaceID !== currentLocation?.workspaceID
-          )
+          ) {
             return;
+          }
           const scope = JSON.stringify([location?.directory ?? "", location?.workspaceID ?? ""]);
           let client = clients.get(scope);
           if (!client) {
             const [saved, save] = context.storage.store<{ aliases: Record<string, string> }>(
-              `notifications-v1/${scope}`,
+              notificationStorageKey(scope),
               { initial: { aliases: {} } },
             );
             client = {
@@ -186,8 +200,8 @@ const plugin = {
           }
         })
         .catch(() => {
-          // Notifications are optional; RPC/storage failures do not open dialogs
-          // or break the manual inspection command.
+          // Notifications are optional; RPC/storage failures do not open
+          // dialogs or break the manual inspection command.
         });
       return pending;
     };

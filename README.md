@@ -190,7 +190,14 @@ Explanations reflect the catalog visible to the plugin transform. With `strict: 
 
 ### Change visibility and plugin ordering
 
-- **Change notifications:** The first resolution sets a silent baseline. When an alias target changes later, the TUI displays a toast, and `/model-aliases` shows the previous target, new target, and detection timestamp. Updating an alias's `match` or `filter` resets its baseline.
+- **Change notifications:** The plugin compares confirmed effective targets per alias key
+  and location across configuration and policy edits. The first resolution of an alias
+  sets a silent baseline and adding a new alias stays silent too; only an actual target
+  change creates a notice — the TUI displays a toast and `/model-aliases` shows the
+  previous target, new target, and detection timestamp. Edits whose winner stays the same
+  (cosmetic or unchanged ones) never create a new notice. Inline plugin options reload
+  with the host configuration; editing `.opencode/opencode-model-aliases.jsonc` still
+  requires a restart.
 - **Plugin ordering:** The plugin resolves against the fresh catalog and observes subsequent `model.updated` events. If a downstream plugin rewrites an alias `modelID`, the inspect report can return `unavailable`. Do not rely on plugin execution order.
 
 ## Troubleshooting

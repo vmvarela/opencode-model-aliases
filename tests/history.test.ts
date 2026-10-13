@@ -128,7 +128,7 @@ describe("confirmed target history", () => {
     expect(failed.callbacks).toHaveLength(0);
   });
 
-  it("isolates locations and resets only changed effective policies", async () => {
+  it("isolates locations and keeps confirmed targets across policy changes", async () => {
     const storage = new Map<string, unknown>();
     await plugin.setup(harness(storage).ctx);
     const other = harness(storage, [B()], "/virtual/other");
@@ -154,7 +154,19 @@ describe("confirmed target history", () => {
       directory: "/virtual/history",
     });
     await plugin.setup(renamed.ctx);
-    expect((await rows(renamed))[0]?.transition?.from).toBe("p/model-a");
+    const baseline = (await rows(renamed))[0]?.transition;
+    expect(baseline?.from).toBe("p/model-a");
+    // Selection-policy change with an unchanged target: no new transition and
+    // the existing one (including its id) survives.
+    const narrowed = createHarness({
+      storage,
+      sources: [B()],
+      options: { aliases: { "p/latest": { match: "p/model-b" } } },
+      directory: "/virtual/history",
+    });
+    await plugin.setup(narrowed.ctx);
+    expect((await rows(narrowed))[0]?.transition).toEqual(baseline);
+    // Selection-policy change that flips the effective target transitions.
     const changed = createHarness({
       storage,
       sources: [A()],
@@ -162,7 +174,127 @@ describe("confirmed target history", () => {
       directory: "/virtual/history",
     });
     await plugin.setup(changed.ctx);
-    expect((await rows(changed))[0]?.transition).toBeUndefined();
+    expect((await rows(changed))[0]?.transition).toMatchObject({
+      from: "p/model-b",
+      to: "p/model-a",
+    });
+  });
+
+  it("treats exclude changes as effective target changes and reverses them", async () => {
+    const storage = new Map<string, unknown>();
+    const base = harness(storage, [A()]);
+    await plugin.setup(base.ctx);
+    expect((await rows(base))[0]?.transition).toBeUndefined();
+    const excluded = createHarness({
+      storage,
+      sources: [A(), B()],
+      options: { aliases: { "p/latest": { match: "p/model-*", exclude: "p/model-a" } } },
+      directory: "/virtual/history",
+    });
+    await plugin.setup(excluded.ctx);
+    const switched = (await rows(excluded))[0]?.transition;
+    expect(switched).toMatchObject({ from: "p/model-a", to: "p/model-b" });
+    expect((await rows(excluded))[0]?.transition?.id).toBe(switched?.id);
+    const reversed = harness(storage, [A()]);
+    await plugin.setup(reversed.ctx);
+    const back = (await rows(reversed))[0]?.transition;
+    expect(back).toMatchObject({ from: "p/model-b", to: "p/model-a" });
+    expect(back?.id).not.toBe(switched?.id);
+    // Restart with the same target keeps the reversal transition untouched.
+    const restart = harness(storage, [A()]);
+    await plugin.setup(restart.ctx);
+    expect((await rows(restart))[0]?.transition).toEqual(back);
+  });
+
+  it("records filter-induced replacement and preserves the last valid target through the unresolved interval", async () => {
+    const storage = new Map<string, unknown>();
+    const wideSource = sourceModel({
+      providerID: "p",
+      id: "model-b",
+      modelID: "wire-b",
+      released: 200,
+      limit: { context: 400_000, output: 8_192 },
+    });
+    const narrowOptions = {
+      aliases: { "p/latest": { match: "p/model-*", filter: { minContext: 300_000 } } },
+    };
+    await plugin.setup(harness(storage, [A()]).ctx);
+    // The filter excludes every candidate: still configured, unresolved, and
+    // no more confirmations in between — the recovery below proves the target
+    // survived only if the unresolved interval preserved it.
+    const unresolved = createHarness({
+      storage,
+      sources: [A()],
+      options: narrowOptions,
+      directory: "/virtual/history",
+    });
+    await plugin.setup(unresolved.ctx);
+    expect((await rows(unresolved))[0]).toMatchObject({ status: "unresolved" });
+    expect((await rows(unresolved))[0]?.transition).toBeUndefined();
+    const eligible = createHarness({
+      storage,
+      sources: [A(), wideSource],
+      options: narrowOptions,
+      directory: "/virtual/history",
+    });
+    await plugin.setup(eligible.ctx);
+    const row = (await rows(eligible))[0];
+    expect(row?.target).toBe("model-b");
+    expect(row?.transition).toMatchObject({ from: "p/model-a", to: "p/model-b" });
+    const repeat = createHarness({
+      storage,
+      sources: [A(), wideSource],
+      options: narrowOptions,
+      directory: "/virtual/history",
+    });
+    await plugin.setup(repeat.ctx);
+    expect((await rows(repeat))[0]?.transition).toEqual(row?.transition);
+  });
+
+  it("does not overwrite history when an invalid strict setup fails", async () => {
+    const storage = new Map<string, unknown>();
+    await plugin.setup(harness(storage, [A()]).ctx);
+    const baseline = JSON.stringify([...storage.values()]);
+    const failed = createHarness({
+      storage,
+      sources: [B()],
+      options: { strict: true, aliases: { "p/latest": { match: "p/model-a" } } },
+      directory: "/virtual/history",
+    });
+    await expect(plugin.setup(failed.ctx)).rejects.toThrow("strict");
+    expect(JSON.stringify([...storage.values()])).toBe(baseline);
+    const recovered = createHarness({
+      storage,
+      sources: [A(), B()],
+      options,
+      directory: "/virtual/history",
+    });
+    await plugin.setup(recovered.ctx);
+    expect((await rows(recovered))[0]?.transition).toMatchObject({
+      from: "p/model-a",
+      to: "p/model-b",
+    });
+  });
+
+  it("drops history of deleted aliases and starts silently when recreated", async () => {
+    const storage = new Map<string, unknown>();
+    await plugin.setup(harness(storage, [A()]).ctx);
+    const removed = createHarness({
+      storage,
+      sources: [A()],
+      options: { aliases: {} },
+      directory: "/virtual/history",
+    });
+    await plugin.setup(removed.ctx);
+    const recreated = createHarness({
+      storage,
+      sources: [B()],
+      options,
+      directory: "/virtual/history",
+    });
+    await plugin.setup(recreated.ctx);
+    expect((await rows(recreated))[0]?.target).toBe("model-b");
+    expect((await rows(recreated))[0]?.transition).toBeUndefined();
   });
 
   it("treats corrupt state as a fresh baseline and tolerates storage failures", async () => {
