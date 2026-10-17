@@ -236,7 +236,7 @@ export default Plugin.define({
     }
     let config: NormalizedConfig = loaded.config;
 
-    let history = await createHistory(ctx.storage, ctx.location, config.aliases);
+    const history = await createHistory(ctx.storage, ctx.location, config.aliases);
 
     // The v2 host swallows transform exceptions (State.get catches, disables
     // the plugin and rebuilds the state), so the first ctx.model.list() may
@@ -481,16 +481,18 @@ export default Plugin.define({
         return { status: "rejected" };
       }
       if (settled === "rejected") return { status: "rejected" };
-      // Success: swap history to the new policies (kept aliases keep their
-      // stored targets and transitions; removed keys are collected) and
-      // refresh the inspection snapshot so report and materialized aliases
-      // stay consistent. The transaction is already committed here (the
-      // transform adopted and materialized the candidate), so a refreshed
-      // inspection reporting unavailability (transient host refresh
-      // failure, conflicting later policy) does not roll the reload back:
-      // the status stays "reloaded" and inspect() self-heals on the next
-      // read. Returning "rejected" would be false: the new config is live.
-      history = await createHistory(ctx.storage, ctx.location, config.aliases);
+      // Success: reconfigure the live history instead of rehydrating from
+      // storage: kept aliases preserve their in-memory entries — including
+      // a transition whose storage.set() failed, which keeps its id while
+      // the pending save is retried — removed aliases are pruned, and the
+      // refreshed inspection snapshot keeps report and materialized
+      // aliases consistent. Recreating from stale storage would discard
+      // that unpersisted transition and re-emit a new one (fresh id).
+      // The transaction is already committed here (the transform adopted
+      // and materialized the candidate), so a refreshed inspection
+      // reporting unavailability does not roll the reload back: the status
+      // stays "reloaded" and inspect() self-heals on the next read.
+      history.reconfigure(config.aliases);
       await readInspection();
       return { status: "reloaded" };
     };

@@ -1054,6 +1054,95 @@ describe("reload RPC", () => {
     await stop?.();
   });
 
+  it("la recarga exitosa conserva la transición no persistida con su id y poda los aliases eliminados", async () => {
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({ aliases: { "github-copilot/sonnet": { match: "github-copilot/**" } } }),
+    );
+    const harness = createHarness({ sources: DEFAULT_SOURCES(), options: {} });
+    const stop = await floatingModels.setup(harness.ctx);
+    const handler = harness.rpc.handlers[0]?.inspect;
+    if (!handler) throw new Error("inspect handler missing");
+    type StoredEntry = { key: string; transition?: { id: string } };
+    const storedHistory = (): StoredEntry[] => {
+      for (const value of harness.storage.values()) {
+        if (
+          typeof value === "object" &&
+          value !== null &&
+          (value as { version?: unknown }).version === 1 &&
+          Array.isArray((value as { aliases?: unknown }).aliases)
+        ) {
+          return (value as { aliases: StoredEntry[] }).aliases;
+        }
+      }
+      throw new Error("baseline history missing from storage");
+    };
+
+    // Baseline confirmed target persisted by the setup (no transition).
+    const baseline = storedHistory();
+    expect(baseline.map((entry) => entry.key)).toEqual(["github-copilot/sonnet"]);
+
+    // Target change with a storage.set() failure: the transition is
+    // recorded in memory but never persisted.
+    const setSpy = vi
+      .spyOn(harness.ctx.storage, "set")
+      .mockRejectedValueOnce(new Error("storage down"));
+    harness.addSource(
+      sourceModel({
+        id: "sonnet-5",
+        providerID: "github-copilot",
+        name: "Sonnet 5",
+        released: 9_000,
+      }),
+    );
+    const first = (await handler({}, {})) as { rows: Array<StoredEntry> };
+    const transitionId = first.rows.find((row) => row.key === "github-copilot/sonnet")?.transition
+      ?.id;
+    expect(transitionId).toBeTypeOf("string");
+    expect(setSpy.mock.calls).toHaveLength(1);
+    // In-memory only: storage still holds the stale baseline.
+    const stale = storedHistory();
+    expect(
+      stale.find((entry) => entry.key === "github-copilot/sonnet")?.transition,
+    ).toBeUndefined();
+
+    // Reload keeps the sonnet alias (target unchanged) and adds pick:
+    // the unpersisted transition must keep its id, be retried and hit
+    // storage instead of being rehydrated stale and re-emitted.
+    setSpy.mockRestore();
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({
+        aliases: {
+          "github-copilot/sonnet": { match: "github-copilot/**" },
+          "anthropic/pick": { match: "anthropic/**" },
+        },
+      }),
+    );
+    expect(await reloadHandler(harness)({}, {})).toEqual({ status: "reloaded" });
+    const rowsAfter = (await handler({}, {})) as { rows: Array<StoredEntry> };
+    expect(rowsAfter.rows.find((row) => row.key === "github-copilot/sonnet")?.transition?.id).toBe(
+      transitionId,
+    );
+    const persisted = storedHistory();
+    expect(persisted.find((entry) => entry.key === "github-copilot/sonnet")?.transition?.id).toBe(
+      transitionId,
+    );
+    expect(persisted.some((entry) => entry.key === "anthropic/pick")).toBe(true);
+
+    // A removed alias is pruned from storage while the surviving entry
+    // keeps the same transition.
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({ aliases: { "github-copilot/sonnet": { match: "github-copilot/**" } } }),
+    );
+    expect(await reloadHandler(harness)({}, {})).toEqual({ status: "reloaded" });
+    const pruned = storedHistory();
+    expect(pruned.map((entry) => entry.key)).toEqual(["github-copilot/sonnet"]);
+    expect(pruned[0]?.transition?.id).toBe(transitionId);
+    await stop?.();
+  });
+
   it("un refresco de inspección fallido tras aplicar no revierte la recarga comprometida", async () => {
     writeConfigFile(
       tempRoot,
