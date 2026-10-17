@@ -82,6 +82,10 @@ export interface Counters {
  * - `inspect()` invokes the `inspect` handler of the last registered RPC.
  * - List failures: `failNextList` (one shot) and `failEveryList` (until
  *   `restoreList`), to simulate failed host refreshes.
+ * - `model.reload()` rebuilds the derived state like `list()` (fresh source,
+ *   callbacks in order, swallow-and-detach on failure), so listing and
+ *   replay reflect the reload; `failNextReload` simulates a rejected host
+ *   reload (one shot).
  */
 export function createHarness(input: {
   sources?: ModelInfo[];
@@ -102,6 +106,7 @@ export function createHarness(input: {
   const registrations: Array<{ callback: (editor: unknown) => void; disposed: boolean }> = [];
   let listFailure: unknown;
   let stickyListFailure: unknown;
+  let reloadFailure: unknown;
 
   const rpc: RpcSpy = { definitions: [], handlers: [], registrations: [] };
   const counters: Counters = {
@@ -212,6 +217,23 @@ export function createHarness(input: {
       },
       reload: async () => {
         counters.reload += 1;
+        if (reloadFailure !== undefined) {
+          const error = reloadFailure;
+          reloadFailure = undefined;
+          throw error;
+        }
+        // Host reload semantics: rebuild the derived state from the source
+        // catalog and run the callbacks, so listing and replay reflect the
+        // reload. Failures swallow-and-detach like list().
+        working = freshFromSource();
+        for (const callback of [...callbacks]) {
+          try {
+            callback(editor);
+          } catch {
+            detach(callback);
+            working = freshFromSource();
+          }
+        }
       },
     },
     provider: {
@@ -268,6 +290,8 @@ export function createHarness(input: {
     },
     /** Visible state after the last replay/list (derived). */
     view: () => working,
+    /** The editor handed to transform callbacks; mutable for failure injection. */
+    editor,
     callbacks,
     /** Source catalog; simulates provider refreshes. */
     addSource: (model: ModelInfo) =>
@@ -284,6 +308,10 @@ export function createHarness(input: {
     },
     restoreList: () => {
       stickyListFailure = undefined;
+    },
+    /** One-shot: the next model.reload() rejects. */
+    failNextReload: (error: unknown) => {
+      reloadFailure = error;
     },
     rpc,
     counters,

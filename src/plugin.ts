@@ -29,6 +29,7 @@ type ModelInfo = Model.Info;
 interface FloatingEditor {
   list(): readonly ModelInfo[];
   update(providerID: string, modelID: string, update: (model: ModelInfo) => void): void;
+  remove(providerID: string, modelID: string): void;
 }
 
 /**
@@ -127,70 +128,115 @@ function replay(
   };
 }
 
+type ReloadStatus = "reloaded" | "rejected";
+
+/**
+ * A candidate config waiting for the next host rebuild. The transform
+ * trials it against a fresh snapshot and settles the waiting reload.
+ */
+interface StagedReload {
+  config: NormalizedConfig;
+  settle: (status: ReloadStatus) => void;
+}
+
+/**
+ * In-memory clone of a catalog snapshot used to trial a staged candidate:
+ * the candidate either validates completely on the clone or the real
+ * editor is never touched (no partial mutation of the active state).
+ */
+function shadowEditor(snapshot: readonly ModelInfo[]): FloatingEditor {
+  const models = snapshot.map((model) => structuredClone(model));
+  return {
+    list: () => models,
+    update: (providerID, modelID, update) => {
+      let model = models.find((entry) => entry.providerID === providerID && entry.id === modelID);
+      if (!model) {
+        model = { id: modelID, providerID } as ModelInfo;
+        models.push(model);
+      }
+      update(model);
+    },
+    remove: (providerID, modelID) => {
+      const index = models.findIndex(
+        (entry) => entry.providerID === providerID && entry.id === modelID,
+      );
+      if (index >= 0) models.splice(index, 1);
+    },
+  };
+}
+
+/**
+ * Startup and reload share one pipeline: nearest config-file discovery,
+ * merge with the host inline options (inline wins per key) and full
+ * normalization. Returns a sanitized public reason; never throws.
+ */
+async function loadEffectiveConfig(
+  directory: string,
+  inline: unknown,
+): Promise<{ ok: true; config: NormalizedConfig } | { ok: false; reason: string }> {
+  const loaded = await loadConfigFile(directory);
+  if (!loaded.ok) return { ok: false, reason: sanitize(loaded.reason) };
+  const fileOptions = loaded.file?.options;
+
+  // Untrusted input; merged with the file as base and the inline host
+  // values with priority. Full validation happens in normalizeOptions
+  // over the merged result.
+  if (inline !== undefined && inline !== null && !isPlainObject(inline)) {
+    return { ok: false, reason: "options must be an object" };
+  }
+  const inlineOptions = isPlainObject(inline) ? inline : {};
+
+  // Raw properties of both sources are preserved, including unknown
+  // roots: whitelisting would hide typos (e.g. "strcit") before
+  // validation. The spread copies as an own data property, safe against
+  // hostile "__proto__" keys (never Object.assign on untrusted input).
+  // The inline>file order is corrected below for strict/debug.
+  const merged: Record<string, unknown> = {
+    ...fileOptions,
+    ...inlineOptions,
+  };
+  for (const key of ["strict", "debug"] as const) {
+    // The inline value, when supplied (even `false`), wins over the file.
+    if (inlineOptions[key] !== undefined) {
+      merged[key] = inlineOptions[key];
+    } else if (fileOptions?.[key] !== undefined) {
+      merged[key] = fileOptions[key];
+    }
+  }
+
+  // Union by key: an inline entry replaces the whole file AliasConfig
+  // for that key (no partial merge). The containers of each source are
+  // already validated; an invalid inline container fails here instead of
+  // silently extending the map.
+  const inlineAliases = inlineOptions.aliases;
+  if (inlineAliases !== undefined && !isPlainObject(inlineAliases)) {
+    return { ok: false, reason: "aliases must be an object ({} is a valid no-op)" };
+  }
+  if (fileOptions?.aliases !== undefined || inlineAliases !== undefined) {
+    merged.aliases = {
+      ...fileOptions?.aliases,
+      ...(isPlainObject(inlineAliases) ? inlineAliases : {}),
+    };
+  }
+
+  const normalized = normalizeOptions(merged as unknown as Options);
+  if (!normalized.ok) return { ok: false, reason: sanitize(normalized.failure.reason) };
+  return { ok: true, config: normalized.config };
+}
+
 export default Plugin.define({
   id: PLUGIN_ID,
   async setup(ctx) {
-    // Load the nearest configuration file BEFORE registering any
-    // transform: a read/parse/merge failure leaves zero transforms
+    // Load the effective configuration BEFORE registering any transform:
+    // a read/parse/merge/normalize failure leaves zero transforms
     // registered.
-    const loaded = await loadConfigFile(ctx.location.directory);
+    const loaded = await loadEffectiveConfig(ctx.location.directory, ctx.options);
     if (!loaded.ok) {
-      throw new Error(`${LOG_PREFIX} invalid configuration: ${sanitize(loaded.reason)}`);
+      throw new Error(`${LOG_PREFIX} invalid configuration: ${loaded.reason}`);
     }
-    const fileOptions = loaded.file?.options;
+    let config: NormalizedConfig = loaded.config;
 
-    // Untrusted input; merged with the file as base and the inline host
-    // values with priority. Full validation happens in normalizeOptions
-    // over the merged result.
-    const inline = ctx.options as unknown;
-    if (inline !== undefined && inline !== null && !isPlainObject(inline)) {
-      throw new Error(`${LOG_PREFIX} invalid configuration: options must be an object`);
-    }
-    const inlineOptions = isPlainObject(inline) ? inline : {};
-
-    // Raw properties of both sources are preserved, including unknown
-    // roots: whitelisting would hide typos (e.g. "strcit") before
-    // validation. The spread copies as an own data property, safe against
-    // hostile "__proto__" keys (never Object.assign on untrusted input).
-    // The inline>file order is corrected below for strict/debug.
-    const merged: Record<string, unknown> = {
-      ...fileOptions,
-      ...inlineOptions,
-    };
-    for (const key of ["strict", "debug"] as const) {
-      // The inline value, when supplied (even `false`), wins over the file.
-      if (inlineOptions[key] !== undefined) {
-        merged[key] = inlineOptions[key];
-      } else if (fileOptions?.[key] !== undefined) {
-        merged[key] = fileOptions[key];
-      }
-    }
-
-    // Union by key: an inline entry replaces the whole file AliasConfig
-    // for that key (no partial merge). The containers of each source are
-    // already validated; an invalid inline container fails here instead of
-    // silently extending the map.
-    const inlineAliases = inlineOptions.aliases;
-    if (inlineAliases !== undefined && !isPlainObject(inlineAliases)) {
-      throw new Error(
-        `${LOG_PREFIX} invalid configuration: aliases must be an object ({} is a valid no-op)`,
-      );
-    }
-    if (fileOptions?.aliases !== undefined || inlineAliases !== undefined) {
-      merged.aliases = {
-        ...fileOptions?.aliases,
-        ...(isPlainObject(inlineAliases) ? inlineAliases : {}),
-      };
-    }
-
-    const normalized = normalizeOptions(merged as unknown as Options);
-    if (!normalized.ok) {
-      throw new Error(
-        `${LOG_PREFIX} invalid configuration: ${sanitize(normalized.failure.reason)}`,
-      );
-    }
-
-    const history = await createHistory(ctx.storage, ctx.location, normalized.config.aliases);
+    let history = await createHistory(ctx.storage, ctx.location, config.aliases);
 
     // The v2 host swallows transform exceptions (State.get catches, disables
     // the plugin and rebuilds the state), so the first ctx.model.list() may
@@ -208,13 +254,67 @@ export default Plugin.define({
     // cleared so partial or stale mappings are never described as current.
     let report: ReplayReport | null = null;
 
+    // Candidate config staged by an explicit reload; the next transform
+    // invocation trials it and either adopts it or reverts atomically.
+    let staged: StagedReload | null = null;
+
     const registration = await ctx.model.transform((hostEditor) => {
+      // Single host→adapter boundary: the host DeepMutable degrades strings
+      // with brand; here it is adapted to the clean editor view.
+      const editor = hostEditor as unknown as FloatingEditor;
+      if (staged) {
+        const current = staged;
+        staged = null;
+        try {
+          // Trial on a clone with the same validation as startup
+          // (collision + strict preflight): a rejected candidate never
+          // touches the real catalog, so the last valid config stays
+          // active without partial mutation.
+          replay(current.config, shadowEditor(editor.list()), true);
+        } catch {
+          current.settle("rejected");
+          try {
+            report = replay(config, editor, false);
+          } catch (error) {
+            report = null;
+            throw error;
+          }
+          return;
+        }
+        try {
+          report = replay(current.config, editor, false);
+        } catch {
+          current.settle("rejected");
+          // In-callback rollback: throwing would make the host discard the
+          // draft AND disable the whole plugin group (and unregister the
+          // RPCs). The trial already proved the candidate ids were absent
+          // from the original draft, so dropping every candidate entry —
+          // including ids shared with the old config, which replay
+          // collision-checks against its initial snapshot — leaves a clean
+          // source catalog to re-materialize the prior config from.
+          for (const alias of current.config.aliases) {
+            editor.remove(alias.provider, alias.modelID);
+          }
+          try {
+            report = replay(config, editor, false);
+          } catch (error) {
+            // Unrecoverable host/editor failure: outside practical
+            // recovery, fall back to the detach path with a null report.
+            report = null;
+            throw error;
+          }
+          return;
+        }
+        // Committed only after the candidate fully materialized: the
+        // status on the RPC can never disagree with the live catalog.
+        config = current.config;
+        current.settle("reloaded");
+        return;
+      }
       try {
-        // Single host→adapter boundary: the host DeepMutable degrades strings
-        // with brand; here it is adapted to the clean editor view.
         // `initializing` is read live: the initial list() runs the transform
         // while it is still true, capturing errors for setup's preflight.
-        report = replay(normalized.config, hostEditor as unknown as FloatingEditor, initializing);
+        report = replay(config, editor, initializing);
       } catch (error) {
         report = null;
         if (initializing && !hasInitialError) {
@@ -323,7 +423,7 @@ export default Plugin.define({
       const alias = input.alias;
       const result = pending.then(async (): Promise<ExplainResponse> => {
         if (stopped) return { status: "unavailable" };
-        if (!normalized.config.aliases.some((entry) => entry.key === alias))
+        if (!config.aliases.some((entry) => entry.key === alias))
           return { status: "unknown-alias" };
         const inspection = await readInspection();
         const explanation = inspection.report?.explanations.get(alias);
@@ -345,9 +445,69 @@ export default Plugin.define({
       );
       return result;
     };
+    // Explicit reload of the discovered configuration file. Serialized with
+    // inspect/explain through the same queue so a reload never interleaves
+    // with an in-flight inspection.
+    const doReload = async (): Promise<{ status: ReloadStatus }> => {
+      const loaded = await loadEffectiveConfig(ctx.location.directory, ctx.options);
+      if (!loaded.ok) return { status: "rejected" };
+      let settled: ReloadStatus | undefined;
+      staged = {
+        config: loaded.config,
+        settle: (status) => {
+          settled = status;
+        },
+      };
+      try {
+        await ctx.model.reload();
+      } catch {
+        staged = null;
+        // The host API failed, but its rebuild may already have run the
+        // transform and committed the candidate (nothing pins "rejected
+        // promise ⇒ nothing materialized" in the pinned host adapter):
+        // reject only when nothing was settled, otherwise a changed
+        // config would be live while the status says rejected.
+        if (settled !== "reloaded") return { status: "rejected" };
+      }
+      try {
+        await ctx.model.list();
+      } catch {
+        // The rebuild failed; the settlement below decides the outcome.
+      }
+      if (settled === undefined) {
+        // The transform never ran (the host rebuild failed before the
+        // replays): nothing was applied.
+        staged = null;
+        return { status: "rejected" };
+      }
+      if (settled === "rejected") return { status: "rejected" };
+      // Success: swap history to the new policies (kept aliases keep their
+      // stored targets and transitions; removed keys are collected) and
+      // refresh the inspection snapshot so report and materialized aliases
+      // stay consistent. The transaction is already committed here (the
+      // transform adopted and materialized the candidate), so a refreshed
+      // inspection reporting unavailability (transient host refresh
+      // failure, conflicting later policy) does not roll the reload back:
+      // the status stays "reloaded" and inspect() self-heals on the next
+      // read. Returning "rejected" would be false: the new config is live.
+      history = await createHistory(ctx.storage, ctx.location, config.aliases);
+      await readInspection();
+      return { status: "reloaded" };
+    };
+    const reload = (): Promise<{ status: ReloadStatus }> => {
+      const result = pending.then(async (): Promise<{ status: ReloadStatus }> => {
+        if (stopped) return { status: "rejected" };
+        return doReload();
+      });
+      pending = result.then(
+        () => {},
+        () => {},
+      );
+      return result;
+    };
     let rpcRegistration: { dispose: () => Promise<void> };
     try {
-      rpcRegistration = await ctx.rpc.register(ModelAliasesRpc, { inspect, explain });
+      rpcRegistration = await ctx.rpc.register(ModelAliasesRpc, { inspect, explain, reload });
     } catch (error) {
       await registration.dispose();
       throw error;

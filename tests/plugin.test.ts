@@ -813,3 +813,296 @@ describe("inspection snapshot regressions", () => {
     await stop?.();
   });
 });
+
+describe("reload RPC", () => {
+  const reloadHandler = (harness: ReturnType<typeof createHarness>) => {
+    const reload = harness.rpc.handlers[0]?.reload;
+    if (!reload) throw new Error("missing reload handler");
+    return reload;
+  };
+
+  it("una recarga exitosa aplica el objetivo nuevo y refresca informe e historial", async () => {
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({
+        aliases: { "github-copilot/sonnet": { match: "github-copilot/sonnet-4" } },
+      }),
+    );
+    const harness = createHarness({ sources: DEFAULT_SOURCES(), options: {} });
+    const stop = await floatingModels.setup(harness.ctx);
+    expect(harness.view().get("github-copilot/sonnet")?.modelID).toBe("sonnet-4-exec");
+
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({
+        aliases: { "github-copilot/sonnet": { match: "github-copilot/sonnet-5" } },
+      }),
+    );
+    harness.addSource(
+      sourceModel({
+        id: "sonnet-5",
+        providerID: "github-copilot",
+        name: "Sonnet 5",
+        released: 9_000,
+      }),
+    );
+    expect(await reloadHandler(harness)({}, {})).toEqual({ status: "reloaded" });
+    expect(harness.view().get("github-copilot/sonnet")?.modelID).toBe("sonnet-5");
+    expect(await harness.inspect()).toContain("Sonnet (alias) (sonnet)\n    → sonnet-5");
+    // The target change is recorded as a transition against the kept alias.
+    expect(await harness.inspect()).toContain(
+      "Last change: github-copilot/sonnet-4 → github-copilot/sonnet-5",
+    );
+    await stop?.();
+  });
+
+  it("un alias eliminado del archivo desaparece del catálogo y del informe", async () => {
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({
+        aliases: {
+          "github-copilot/sonnet": { match: "github-copilot/**" },
+          "anthropic/pick": { match: "anthropic/**" },
+        },
+      }),
+    );
+    const harness = createHarness({ sources: DEFAULT_SOURCES(), options: {} });
+    const stop = await floatingModels.setup(harness.ctx);
+    expect(harness.view().get("anthropic/pick")).toBeDefined();
+
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({ aliases: { "github-copilot/sonnet": { match: "github-copilot/**" } } }),
+    );
+    expect(await reloadHandler(harness)({}, {})).toEqual({ status: "reloaded" });
+    expect(harness.view().get("anthropic/pick")).toBeUndefined();
+    expect(harness.view().get("github-copilot/sonnet")?.modelID).toBe("sonnet-4-exec");
+    const handler = harness.rpc.handlers[0]?.inspect;
+    if (!handler) throw new Error("inspect handler missing");
+    const result = (await handler({}, {})) as { rows: Array<{ key: string }> };
+    expect(result.rows.map((row) => row.key)).toEqual(["github-copilot/sonnet"]);
+    await stop?.();
+  });
+
+  it("un archivo JSONC malformado se rechaza y deja la configuración activa intacta", async () => {
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({ aliases: { "github-copilot/sonnet": { match: "github-copilot/**" } } }),
+    );
+    const harness = createHarness({ sources: DEFAULT_SOURCES(), options: {} });
+    const stop = await floatingModels.setup(harness.ctx);
+    expect(harness.view().get("github-copilot/sonnet")?.modelID).toBe("sonnet-4-exec");
+
+    writeConfigFile(tempRoot, "{ no es jsonc válido");
+    expect(await reloadHandler(harness)({}, {})).toEqual({ status: "rejected" });
+    expect(harness.view().get("github-copilot/sonnet")?.modelID).toBe("sonnet-4-exec");
+    expect(await harness.inspect()).toContain("Sonnet (alias) (sonnet)\n    → sonnet-4");
+    await stop?.();
+  });
+
+  it("una configuración normalizada inválida se rechaza y deja la configuración activa intacta", async () => {
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({ aliases: { "github-copilot/sonnet": { match: "github-copilot/**" } } }),
+    );
+    const harness = createHarness({ sources: DEFAULT_SOURCES(), options: {} });
+    const stop = await floatingModels.setup(harness.ctx);
+
+    // Alias without match: normalization fails after a successful parse.
+    writeConfigFile(tempRoot, JSON.stringify({ aliases: { "github-copilot/sonnet": {} } }));
+    expect(await reloadHandler(harness)({}, {})).toEqual({ status: "rejected" });
+    expect(harness.view().get("github-copilot/sonnet")?.modelID).toBe("sonnet-4-exec");
+    expect(await harness.inspect()).toContain("Sonnet (alias) (sonnet)\n    → sonnet-4");
+    await stop?.();
+  });
+
+  it("colisión y preflight strict rechazados preservan el estado activo; una recarga válida posterior se aplica", async () => {
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({ aliases: { "github-copilot/sonnet": { match: "github-copilot/**" } } }),
+    );
+    const harness = createHarness({ sources: DEFAULT_SOURCES(), options: {} });
+    const stop = await floatingModels.setup(harness.ctx);
+
+    // Collision: the candidate aliases an id that already exists as source.
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({ aliases: { "anthropic/claude-a": { match: "anthropic/**" } } }),
+    );
+    expect(await reloadHandler(harness)({}, {})).toEqual({ status: "rejected" });
+    const untouched = harness.view().get("anthropic/claude-a");
+    expect(untouched?.name).toBe("Claude A");
+    expect(harness.view().get("github-copilot/sonnet")?.modelID).toBe("sonnet-4-exec");
+
+    // Strict preflight: the candidate is valid but cannot resolve now.
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({
+        strict: true,
+        aliases: { "openai/void": { match: "openai/nonexistent*" } },
+      }),
+    );
+    expect(await reloadHandler(harness)({}, {})).toEqual({ status: "rejected" });
+    expect(harness.view().get("github-copilot/sonnet")?.modelID).toBe("sonnet-4-exec");
+    expect(await harness.inspect()).toContain("Sonnet (alias) (sonnet)\n    → sonnet-4");
+
+    // A valid replacement is still accepted afterwards.
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({ aliases: { "anthropic/pick": { match: "anthropic/**" } } }),
+    );
+    expect(await reloadHandler(harness)({}, {})).toEqual({ status: "reloaded" });
+    expect(harness.view().get("anthropic/pick")?.modelID).toBe("claude-b");
+    expect(harness.view().get("github-copilot/sonnet")).toBeUndefined();
+    await stop?.();
+  });
+
+  it("un fallo del model.reload() del host se rechaza y preserva el estado activo", async () => {
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({ aliases: { "github-copilot/sonnet": { match: "github-copilot/**" } } }),
+    );
+    const harness = createHarness({ sources: DEFAULT_SOURCES(), options: {} });
+    const stop = await floatingModels.setup(harness.ctx);
+
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({ aliases: { "anthropic/pick": { match: "anthropic/**" } } }),
+    );
+    harness.failNextReload(new Error("host reload down"));
+    expect(await reloadHandler(harness)({}, {})).toEqual({ status: "rejected" });
+    expect(harness.view().get("anthropic/pick")).toBeUndefined();
+    expect(harness.view().get("github-copilot/sonnet")?.modelID).toBe("sonnet-4-exec");
+    expect(await harness.inspect()).toContain("Sonnet (alias) (sonnet)\n    → sonnet-4");
+
+    harness.addSource(
+      sourceModel({
+        id: "sonnet-5",
+        providerID: "github-copilot",
+        name: "Sonnet 5",
+        released: 9_000,
+      }),
+    );
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({ aliases: { "github-copilot/sonnet": { match: "github-copilot/**" } } }),
+    );
+    expect(await reloadHandler(harness)({}, {})).toEqual({ status: "reloaded" });
+    expect(harness.view().get("github-copilot/sonnet")?.modelID).toBe("sonnet-5");
+    await stop?.();
+  });
+
+  it("la aplicación real fallida se recupera en el mismo callback: rechazo sin perder el transform", async () => {
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({
+        aliases: { "github-copilot/sonnet": { match: "github-copilot/sonnet-4" } },
+      }),
+    );
+    const harness = createHarness({
+      sources: [
+        ...DEFAULT_SOURCES(),
+        sourceModel({
+          id: "sonnet-5",
+          providerID: "github-copilot",
+          name: "Sonnet 5",
+          released: 9_000,
+        }),
+      ],
+      options: {},
+    });
+    const stop = await floatingModels.setup(harness.ctx);
+    expect(harness.view().get("github-copilot/sonnet")?.modelID).toBe("sonnet-4-exec");
+
+    // Candidate: sonnet moves to sonnet-5 and a new pick alias appears.
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({
+        aliases: {
+          "github-copilot/sonnet": { match: "github-copilot/sonnet-5" },
+          "anthropic/pick": { match: "anthropic/**" },
+        },
+      }),
+    );
+    // One-shot failure on the real update for pick, after sonnet was
+    // already mutated: the shadow clone is independent, so the trial
+    // passes while the real materialization breaks halfway.
+    const realUpdate = harness.editor.update;
+    let armed = true;
+    harness.editor.update = (providerID, modelID, update) => {
+      if (armed && providerID === "anthropic" && modelID === "pick") {
+        armed = false;
+        throw new Error("host editor refused the pick update");
+      }
+      return realUpdate(providerID, modelID, update);
+    };
+
+    expect(await reloadHandler(harness)({}, {})).toEqual({ status: "rejected" });
+    // The prior materialization was restored on the same draft: sonnet-4
+    // again, the candidate-only pick is absent, no detached callback.
+    expect(harness.view().get("github-copilot/sonnet")?.modelID).toBe("sonnet-4-exec");
+    expect(harness.view().get("github-copilot/sonnet")?.name).toBe("Sonnet (alias)");
+    expect(harness.view().get("anthropic/pick")).toBeUndefined();
+    expect(harness.callbacks).toHaveLength(1);
+    expect(await harness.inspect()).toContain("Sonnet (alias) (sonnet)\n    → sonnet-4");
+    expect(await harness.inspect()).not.toContain("Pick (alias)");
+
+    // A subsequent reload of the same candidate file succeeds.
+    expect(await reloadHandler(harness)({}, {})).toEqual({ status: "reloaded" });
+    expect(harness.view().get("github-copilot/sonnet")?.modelID).toBe("sonnet-5");
+    expect(harness.view().get("anthropic/pick")?.modelID).toBe("claude-b");
+    await stop?.();
+  });
+
+  it("un refresco de inspección fallido tras aplicar no revierte la recarga comprometida", async () => {
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({ aliases: { "github-copilot/sonnet": { match: "github-copilot/**" } } }),
+    );
+    const harness = createHarness({ sources: DEFAULT_SOURCES(), options: {} });
+    const stop = await floatingModels.setup(harness.ctx);
+
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({ aliases: { "anthropic/pick": { match: "anthropic/**" } } }),
+    );
+    // The candidate already materialized inside the host rebuild; an
+    // inspection refresh that cannot confirm the mapping afterwards is
+    // transient: the status stays "reloaded" and state stays committed.
+    harness.failEveryList(new Error("inspection refresh down"));
+    expect(await reloadHandler(harness)({}, {})).toEqual({ status: "reloaded" });
+    expect(harness.view().get("anthropic/pick")?.modelID).toBe("claude-b");
+    expect(harness.callbacks).toHaveLength(1);
+    harness.restoreList();
+    expect(await harness.inspect()).toContain("Pick (alias) (pick)\n    → claude-b");
+    await stop?.();
+  });
+
+  it("un fallo del model.reload() tras el rebuild no niega una recarga ya comprometida", async () => {
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({ aliases: { "github-copilot/sonnet": { match: "github-copilot/**" } } }),
+    );
+    const harness = createHarness({ sources: DEFAULT_SOURCES(), options: {} });
+    const stop = await floatingModels.setup(harness.ctx);
+
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({ aliases: { "anthropic/pick": { match: "anthropic/**" } } }),
+    );
+    // The host reload runs its rebuild (the candidate materializes and is
+    // committed) and rejects afterwards: rejection must not claim a failed
+    // reload for a config that is already live.
+    const realReload = harness.ctx.model.reload;
+    Object.assign(harness.ctx.model, {
+      reload: async () => {
+        await realReload();
+        throw new Error("host reload broke after rebuild");
+      },
+    });
+    expect(await reloadHandler(harness)({}, {})).toEqual({ status: "reloaded" });
+    expect(harness.view().get("anthropic/pick")?.modelID).toBe("claude-b");
+    expect(await harness.inspect()).toContain("Pick (alias) (pick)\n    → claude-b");
+    await stop?.();
+  });
+});

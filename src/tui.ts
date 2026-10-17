@@ -16,14 +16,27 @@ const COMMAND_TITLE = "Model aliases";
 const SLASH_COMMAND_NAME = "model-aliases";
 
 const USAGE_MESSAGE =
-  'Unexpected arguments. Use /model-aliases or /model-aliases explain <provider/alias>. Quote the alias if it contains spaces: /model-aliases explain "<provider/alias>".';
+  'Unexpected arguments. Use /model-aliases, /model-aliases reload, or /model-aliases explain <provider/alias>. Quote the alias if it contains spaces: /model-aliases explain "<provider/alias>".';
 const ERROR_MESSAGE = "Unable to load model aliases. Please reload or try again.";
+const RELOAD_SUCCESS_MESSAGE = "Model aliases reloaded.";
+const RELOAD_REJECTED_MESSAGE = "Reload was rejected. Check the configuration or OpenCode logs.";
+const RELOAD_ERROR_MESSAGE = "Unable to reload model aliases. Please try again.";
 
 export type InspectResponseRow = InspectReportRow;
 
 export interface InspectResponse {
   readonly text: string;
   readonly rows: readonly InspectResponseRow[];
+}
+
+export interface ReloadResponse {
+  readonly status: "reloaded" | "rejected";
+}
+
+export function isReloadResponse(value: unknown): value is ReloadResponse {
+  if (typeof value !== "object" || value === null) return false;
+  const res = value as Record<string, unknown>;
+  return res.status === "reloaded" || res.status === "rejected";
 }
 
 function isInspectRow(value: unknown): value is InspectResponseRow {
@@ -355,6 +368,36 @@ const plugin = {
             }
           } catch {
             await context.ui.dialog.alert({ title: COMMAND_TITLE, message: ERROR_MESSAGE });
+          }
+          return;
+        }
+        if (args === "reload") {
+          const location = context.location ?? context.data.location.default();
+          try {
+            const response = await context.client.rpc(ModelAliasesRpc).reload({}, { location });
+            if (!isReloadResponse(response)) {
+              await context.ui.dialog.alert({
+                title: COMMAND_TITLE,
+                message: RELOAD_ERROR_MESSAGE,
+              });
+              return;
+            }
+            if (response.status === "reloaded") {
+              await context.ui.dialog.alert({
+                title: COMMAND_TITLE,
+                message: RELOAD_SUCCESS_MESSAGE,
+              });
+              return;
+            }
+            await context.ui.dialog.alert({
+              title: COMMAND_TITLE,
+              message: RELOAD_REJECTED_MESSAGE,
+            });
+          } catch {
+            await context.ui.dialog.alert({
+              title: COMMAND_TITLE,
+              message: RELOAD_ERROR_MESSAGE,
+            });
           }
           return;
         }
