@@ -6,12 +6,22 @@ const reasonProperties = { code: { type: "string" }, message: { type: "string" }
 /**
  * Public RPC contract of the plugin, consumed by the TUI (which imports only
  * this module, never the backend barrel): id "opencode-model-aliases" with
- * `inspect` and opt-in `explain` methods, no events. Portable definition built from plain JSON Schema objects, no schema
+ * `inspect`, opt-in `explain` and explicit `reload` methods, no events.
+ * Portable definition built from plain JSON Schema objects, no schema
  * library at runtime (pinned @opencode/plugin 2.0.16).
  */
 export const ModelAliasesRpc = {
   id: "opencode-model-aliases",
   methods: {
+    reload: {
+      input: { type: "object", properties: {}, additionalProperties: false },
+      output: {
+        type: "object",
+        properties: { status: { type: "string", enum: ["reloaded", "rejected"] } },
+        required: ["status"],
+        additionalProperties: false,
+      },
+    },
     explain: {
       input: {
         type: "object",

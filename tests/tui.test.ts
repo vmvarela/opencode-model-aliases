@@ -6,6 +6,7 @@ import plugin, {
   formatDetailMessage,
   type InspectResponseRow,
   isInspectResponse,
+  isReloadResponse,
 } from "../src/tui.js";
 import { makeTempRoot, removeTempRoot } from "./config-fs.js";
 import { createHarness, sourceModel } from "./harness.js";
@@ -68,6 +69,12 @@ interface StrictContextOptions {
   defaultLocation?: { directory: string } | undefined;
   explainHandler?: (input: unknown, options?: { location?: unknown }) => Promise<unknown>;
   inspectHandler?:
+    | ((
+        input: Record<string, never>,
+        options?: { location?: unknown } | undefined,
+      ) => Promise<unknown>)
+    | undefined;
+  reloadHandler?:
     | ((
         input: Record<string, never>,
         options?: { location?: unknown } | undefined,
@@ -194,6 +201,7 @@ function createStrictContext(options?: StrictContextOptions) {
   const confirms: ConfirmCall[] = [];
   const selectCalls: SelectCall[] = [];
   const inspectCalls: Array<{ input: unknown; options?: unknown }> = [];
+  const reloadCalls: Array<{ input: unknown; options?: unknown }> = [];
 
   const defaultLoc = options?.defaultLocation ?? { directory: "/default/workspace" };
   let simulatedSelectReturn = options?.selectReturnValue;
@@ -253,6 +261,10 @@ function createStrictContext(options?: StrictContextOptions) {
             return inspectHandler(input, rpcOptions);
           },
         ),
+        reload: vi.fn(async (input: Record<string, never>, rpcOptions?: { location?: unknown }) => {
+          reloadCalls.push({ input, options: rpcOptions });
+          return options?.reloadHandler?.(input, rpcOptions) ?? { status: "reloaded" };
+        }),
       };
     }),
     session: forbiddenProxy("client.session"),
@@ -398,6 +410,7 @@ function createStrictContext(options?: StrictContextOptions) {
     confirmSpy,
     selectCalls,
     inspectCalls,
+    reloadCalls,
     activeCommands,
     returnedLayers,
     setConfirmReturn: (val: boolean | undefined | (() => boolean | undefined)) => {
@@ -1891,7 +1904,7 @@ describe("TUI explain action", () => {
     const explainHandler = vi.fn(async (): Promise<unknown> => ({ status: "unknown-alias" }));
     const harness = createStrictContext({ explainHandler });
     const stop = plugin.setup(harness.context);
-    for (const input of ["explain", "explain p/a extra", "reload"])
+    for (const input of ["explain", "explain p/a extra", "reload extra"])
       await harness.activeCommands[0]?.run(input);
     expect(explainHandler).not.toHaveBeenCalled();
     await harness.activeCommands[0]?.run("explain p/a");
@@ -1905,6 +1918,194 @@ describe("TUI explain action", () => {
     explainHandler.mockRejectedValueOnce(new Error("PRIVATE"));
     await harness.activeCommands[0]?.run("explain p/a");
     expect(harness.alerts.at(-1)?.message).not.toContain("PRIVATE");
+    await stop?.();
+  });
+});
+
+describe("TUI reload action", () => {
+  it("isReloadResponse validates schema defensively", () => {
+    expect(isReloadResponse({ status: "reloaded" })).toBe(true);
+    expect(isReloadResponse({ status: "rejected" })).toBe(true);
+
+    expect(isReloadResponse(null)).toBe(false);
+    expect(isReloadResponse(undefined)).toBe(false);
+    expect(isReloadResponse("reloaded")).toBe(false);
+    expect(isReloadResponse({})).toBe(false);
+    expect(isReloadResponse({ status: "unknown" })).toBe(false);
+    expect(isReloadResponse({ status: 123 })).toBe(false);
+  });
+
+  it("confirms successful configuration reload via native alert", async () => {
+    const harness = createStrictContext({
+      reloadHandler: async () => ({ status: "reloaded" }),
+    });
+    const stop = plugin.setup(harness.context);
+    const command = harness.activeCommands[0];
+
+    await command?.run("reload");
+
+    expect(harness.reloadCalls).toHaveLength(1);
+    expect(harness.alerts).toHaveLength(1);
+    expect(harness.alerts[0]).toEqual({
+      title: "Model aliases",
+      message: "Model aliases reloaded.",
+    });
+    await stop?.();
+  });
+
+  it("asks the user to check configuration or logs when reload is rejected", async () => {
+    const harness = createStrictContext({
+      reloadHandler: async () => ({ status: "rejected" }),
+    });
+    const stop = plugin.setup(harness.context);
+    const command = harness.activeCommands[0];
+
+    await command?.run("reload");
+
+    expect(harness.reloadCalls).toHaveLength(1);
+    expect(harness.alerts).toHaveLength(1);
+    expect(harness.alerts[0]?.title).toBe("Model aliases");
+    expect(harness.alerts[0]?.message).toMatch(/rejected/i);
+    expect(harness.alerts[0]?.message).toMatch(/configuration or OpenCode logs/i);
+    await stop?.();
+  });
+
+  it("forwards explicit location when context provides location", async () => {
+    const harness = createStrictContext({
+      location: { directory: "/explicit/workspace" },
+      reloadHandler: async () => ({ status: "reloaded" }),
+    });
+    const stop = plugin.setup(harness.context);
+    const command = harness.activeCommands[0];
+
+    await command?.run("reload");
+
+    expect(harness.defaultLocationSpy).not.toHaveBeenCalled();
+    expect(harness.reloadCalls).toEqual([
+      { input: {}, options: { location: { directory: "/explicit/workspace" } } },
+    ]);
+    await stop?.();
+  });
+
+  it("falls back to data.location.default() when context.location is omitted", async () => {
+    const harness = createStrictContext({
+      location: undefined,
+      defaultLocation: { directory: "/fallback/workspace" },
+      reloadHandler: async () => ({ status: "reloaded" }),
+    });
+    const stop = plugin.setup(harness.context);
+    const command = harness.activeCommands[0];
+
+    await command?.run("reload");
+
+    expect(harness.defaultLocationSpy).toHaveBeenCalled();
+    expect(harness.reloadCalls).toEqual([
+      { input: {}, options: { location: { directory: "/fallback/workspace" } } },
+    ]);
+    await stop?.();
+  });
+
+  it("displays generic non-leaking failure on malformed RPC response", async () => {
+    for (const malformed of [
+      null,
+      undefined,
+      {},
+      { status: "unknown" },
+      { status: 123 },
+      "not an object",
+    ]) {
+      const harness = createStrictContext({
+        reloadHandler: async () => malformed,
+      });
+      const stop = plugin.setup(harness.context);
+      const command = harness.activeCommands[0];
+
+      await command?.run("reload");
+
+      expect(harness.alerts).toHaveLength(1);
+      expect(harness.alerts[0]?.title).toBe("Model aliases");
+      expect(harness.alerts[0]?.message).toBe("Unable to reload model aliases. Please try again.");
+      await stop?.();
+    }
+  });
+
+  it("displays generic non-leaking failure on thrown RPC error without leaking sensitive details", async () => {
+    const harness = createStrictContext({
+      reloadHandler: async () => {
+        throw new Error("SECRET_ENV_KEY=xyz internal backend stack dump");
+      },
+    });
+    const stop = plugin.setup(harness.context);
+    const command = harness.activeCommands[0];
+
+    await command?.run("reload");
+
+    expect(harness.alerts).toHaveLength(1);
+    expect(harness.alerts[0]?.title).toBe("Model aliases");
+    expect(harness.alerts[0]?.message).toBe("Unable to reload model aliases. Please try again.");
+    expect(harness.alerts[0]?.message).not.toContain("SECRET_ENV_KEY");
+    await stop?.();
+  });
+
+  it("rejects extra arguments locally with updated usage copy and does not invoke reload RPC", async () => {
+    const harness = createStrictContext();
+    const stop = plugin.setup(harness.context);
+    const command = harness.activeCommands[0];
+
+    await command?.run("reload extra");
+    await command?.run("reload --force");
+    await command?.run("reload 123");
+
+    expect(harness.reloadCalls).toHaveLength(0);
+    expect(harness.alerts).toHaveLength(3);
+    for (const alert of harness.alerts) {
+      expect(alert.title).toBe("Model aliases");
+      expect(alert.message).toMatch(/unexpected arguments/i);
+      expect(alert.message).toContain("/model-aliases reload");
+    }
+    await stop?.();
+  });
+
+  it("supports trimmed input for exact reload command", async () => {
+    const harness = createStrictContext({
+      reloadHandler: async () => ({ status: "reloaded" }),
+    });
+    const stop = plugin.setup(harness.context);
+    const command = harness.activeCommands[0];
+
+    await command?.run("  reload  ");
+
+    expect(harness.reloadCalls).toHaveLength(1);
+    expect(harness.alerts[0]?.message).toBe("Model aliases reloaded.");
+    await stop?.();
+  });
+
+  it("preserves inspect and explain behaviors alongside reload", async () => {
+    const explainHandler = vi.fn(async () => ({ status: "unknown-alias" }));
+    const inspectHandler = vi.fn(async () => ({ text: "Report text", rows: [SAMPLE_ROW_ACTIVE] }));
+    const reloadHandler = vi.fn(async () => ({ status: "reloaded" }));
+    const harness = createStrictContext({
+      explainHandler,
+      inspectHandler,
+      reloadHandler,
+      selectReturnValue: undefined,
+    });
+    const stop = plugin.setup(harness.context);
+    const command = harness.activeCommands[0];
+
+    // Explain
+    await command?.run("explain test/alias");
+    expect(explainHandler).toHaveBeenCalledTimes(1);
+
+    // Inspect (bare command)
+    await command?.run("");
+    expect(harness.selectSpy).toHaveBeenCalledTimes(1);
+
+    // Reload
+    await command?.run("reload");
+    expect(reloadHandler).toHaveBeenCalledTimes(1);
+    expect(harness.alerts.at(-1)?.message).toBe("Model aliases reloaded.");
+
     await stop?.();
   });
 });

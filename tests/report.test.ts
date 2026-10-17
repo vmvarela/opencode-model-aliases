@@ -73,7 +73,18 @@ afterEach(() => {
 describe("ModelAliasesRpc contract", () => {
   it("preserva inspect y añade explain sin eventos", () => {
     expect(ModelAliasesRpc.id).toBe("opencode-model-aliases");
-    expect(Object.keys(ModelAliasesRpc.methods)).toEqual(["explain", "inspect"]);
+    expect(Object.keys(ModelAliasesRpc.methods)).toEqual(["reload", "explain", "inspect"]);
+    expect(ModelAliasesRpc.methods.reload.input).toEqual({
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    });
+    expect(ModelAliasesRpc.methods.reload.output).toEqual({
+      type: "object",
+      properties: { status: { type: "string", enum: ["reloaded", "rejected"] } },
+      required: ["status"],
+      additionalProperties: false,
+    });
     expect(ModelAliasesRpc.methods.inspect.input).toEqual({
       type: "object",
       properties: {},

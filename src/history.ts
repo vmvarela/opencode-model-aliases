@@ -112,6 +112,25 @@ export async function createHistory(
     // Persistence is best effort; resolution must work even if storage fails.
   }
   return {
+    /**
+     * Applies a new alias set on the live instance instead of rehydrating
+     * from storage: kept aliases preserve their in-memory entries (dirty,
+     * unpersisted transitions included — the same entry keeps its id and
+     * the pending save is retried) and keys no longer configured are
+     * pruned, marked for the next persistence retry. The stored `policy`
+     * hash of a kept entry only refreshes when its target changes, exactly
+     * like the hydration path.
+     */
+    reconfigure(aliases: readonly NormalizedAlias[]) {
+      policies.clear();
+      for (const alias of aliases) policies.set(alias.key, policyID(alias));
+      for (const key of [...entries.keys()]) {
+        if (!policies.has(key)) {
+          entries.delete(key);
+          dirty = true;
+        }
+      }
+    },
     async observe(rows: readonly AliasReportRow[], visible: ReadonlySet<string>) {
       for (const row of rows) {
         if (row.status !== "resolved" || !visible.has(row.key) || !row.providerID || !row.catalogID)

@@ -157,7 +157,8 @@ Aliases can also live in `.opencode/opencode-model-aliases.jsonc` (JSONC comment
 trailing commas are fine); the plugin uses the nearest file found from the working directory
 upward. Inline options win: an inline alias replaces a file alias with the same key, and
 inline `strict`/`debug` values win. Inline options apply when OpenCode reloads its
-configuration; the `.jsonc` file is read at plugin start, so restart after editing it.
+configuration; the `.jsonc` file is read at plugin start, so run `/model-aliases reload`
+after editing it (or restart).
 
 For editor autocompletion and shape validation, `schema.json` ships with the package as a
 draft-07 JSON Schema; point the config file's `$schema` at the default-branch URL
@@ -171,6 +172,7 @@ and provider equality remain runtime-enforced and authoritative.
 ### TUI inspection and explanation
 
 - **List aliases**: Run `/model-aliases` (or **Model aliases** in the command palette) to see the current target, the real model ID used for requests, and failure reasons if unresolved.
+- **Reload file configuration**: Run `/model-aliases reload` to re-read `.opencode/opencode-model-aliases.jsonc` without restarting OpenCode. It reuses the same discovery, parsing and validation as startup; if the new configuration is invalid, the last valid one stays active and the command reports the failure. Reload only re-reads the file — inline `ctx.options`/host plugin configuration still applies only when OpenCode reloads its configuration, and plugin code changes still require a restart. There is no filesystem watcher or automatic reload; the command only acts when run.
 - **Explain resolution**: Run `/model-aliases explain <provider>/<alias-id>` for the full decision trail: matched patterns, rejected candidates with unmet criteria, and tie-breaking details. Quote aliases containing spaces: `/model-aliases explain "<provider>/<alias-id>"`. Nothing here calls a model.
 - **Autocomplete note**: In OpenCode 2.0.22, selecting the slash suggestion leaves a trailing space; press Enter again.
 
@@ -196,8 +198,8 @@ Explanations reflect the catalog visible to the plugin transform. With `strict: 
   change creates a notice — the TUI displays a toast and `/model-aliases` shows the
   previous target, new target, and detection timestamp. Edits whose winner stays the same
   (cosmetic or unchanged ones) never create a new notice. Inline plugin options reload
-  with the host configuration; editing `.opencode/opencode-model-aliases.jsonc` still
-  requires a restart.
+  with the host configuration; editing `.opencode/opencode-model-aliases.jsonc` takes
+  effect on `/model-aliases reload` (or restart).
 - **Plugin ordering:** The plugin resolves against the fresh catalog and observes subsequent `model.updated` events. If a downstream plugin rewrites an alias `modelID`, the inspect report can return `unavailable`. Do not rely on plugin execution order.
 
 ## Troubleshooting
@@ -206,7 +208,7 @@ Explanations reflect the catalog visible to the plugin transform. With `strict: 
 |---|---|---|
 | Alias fails to resolve | No models match globs or meet capability/context filters | Run `/model-aliases explain <provider>/<alias-id>` to see rejected candidates and unmet requirements. Confirm candidates have valid release timestamps (`time.released`). |
 | Host startup fails | Invalid shape, unknown key, or invalid glob pattern | Use `schema.json` to check the configuration shape; glob patterns are checked at startup, so inspect the startup error for invalid patterns. |
-| Configuration changes not applied | Editing `.opencode/opencode-model-aliases.jsonc` | Inline `options` in `opencode.json` reload automatically on save, but file config is read only at startup. Restart OpenCode to reload `.jsonc`. |
+| Configuration changes not applied | Editing `.opencode/opencode-model-aliases.jsonc` | Inline `options` in `opencode.json` reload automatically on save; file config is read at startup and on `/model-aliases reload`. Run that command, or restart OpenCode. |
 | Package update not taking effect | OpenCode caches installed plugin packages | Run `opencode plugin update opencode-model-aliases@latest` and restart OpenCode. |
 | OpenCode-disabled model selected | Upstream catalog exposes models marked `disabled: true` | The plugin reads the host catalog directly ([#42](https://github.com/vmvarela/opencode-model-aliases/issues/42)). Add unwanted models explicitly to `exclude`. |
 
