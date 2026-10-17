@@ -3,6 +3,9 @@ import { failure, type ResolveFailure } from "./errors.js";
 import type { CandidateExplanation, ResolutionExplanation } from "./explain.js";
 import { sanitize } from "./report.js";
 
+const HOUR_MS = 3_600_000;
+const DAY_MS = 86_400_000;
+
 export interface Stage {
   name: "matching" | "filtering" | "selection";
   accepted: number;
@@ -81,6 +84,11 @@ function requirementSummary(alias: NormalizedAlias, keys: ReadonlySet<string>): 
   return parts.join("; ");
 }
 
+/** `<n>`-suffixed label of an age in milliseconds (whole hours or days). */
+function minAgeLabel(ms: number): string {
+  return ms % DAY_MS === 0 ? `${ms / DAY_MS}d` : `${ms / HOUR_MS}h`;
+}
+
 /**
  * Pure selection from the provided source list. No side effects and no
  * mutation of the input; the resolver never adds models derived from aliases
@@ -89,6 +97,7 @@ function requirementSummary(alias: NormalizedAlias, keys: ReadonlySet<string>): 
 export function resolveLatest<T extends Candidate>(
   models: readonly T[],
   alias: NormalizedAlias,
+  now: number = Date.now(),
 ): ResolveResult<T> & { explanation: ResolutionExplanation } {
   const stages: Stage[] = [];
   const explanation: ResolutionExplanation = {
@@ -206,15 +215,39 @@ export function resolveLatest<T extends Candidate>(
     detail.released = released;
     return true;
   });
-  stages.push({ name: "selection", accepted: known.length > 0 ? 1 : 0 });
-  if (known.length === 0) {
-    return fail(
-      "selection",
-      "missing-metadata",
-      "no eligible candidate has a reliable time.released timestamp",
-    );
+  // Missing timestamps are already rejected above; `minAge` only applies to
+  // ages that can be evaluated, threshold inclusive (now - released >= ms).
+  const minAgeMs = alias.minAgeMs;
+  const aged =
+    minAgeMs === undefined
+      ? known
+      : known.filter(({ candidate, detail }) => {
+          const age = now - releasedMs(candidate);
+          if (age >= minAgeMs) return true;
+          detail.reasons.push({
+            code: "min-age",
+            message: `Released too recently (requires minAge>=${minAgeLabel(minAgeMs)})`,
+          });
+          return false;
+        });
+  if (known.length === 0 || aged.length === 0) {
+    // A selection count of 0 means no winner: every reliable timestamp was
+    // missing, or none of the dated candidates reached the minimum age.
+    stages.push({ name: "selection", accepted: 0 });
+    return known.length === 0
+      ? fail(
+          "selection",
+          "missing-metadata",
+          "no eligible candidate has a reliable time.released timestamp",
+        )
+      : fail(
+          "selection",
+          "no-eligible",
+          `no eligible candidate has reached the minimum age (minAge>=${minAgeLabel(minAgeMs ?? 0)})`,
+        );
   }
-  const sorted = [...known].sort(({ candidate: a }, { candidate: b }) => {
+  stages.push({ name: "selection", accepted: 1 });
+  const sorted = [...aged].sort(({ candidate: a }, { candidate: b }) => {
     const delta = releasedMs(b) - releasedMs(a);
     if (delta !== 0) return delta;
     return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;

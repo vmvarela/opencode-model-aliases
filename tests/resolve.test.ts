@@ -567,4 +567,124 @@ describe("resolveLatest", () => {
       expect(r.stages[1]).toEqual({ name: "filtering", accepted: 1 });
     }
   });
+
+  describe("filter.minAge con reloj fijo", () => {
+    const NOW = Date.UTC(2026, 0, 15, 12, 0, 0);
+    const HOUR = 3_600_000;
+
+    function ageAlias(minAge: string): NormalizedAlias {
+      return alias({
+        "anthropic/x": { match: "anthropic/**", filter: { minAge } },
+      });
+    }
+
+    it("descarta al demasiado reciente y resuelve al siguiente más antiguo que cumple", () => {
+      const cfg = ageAlias("48h");
+      const r = resolveLatest(
+        [
+          candidate({ id: "fresh", time: { released: NOW - HOUR } }),
+          candidate({ id: "settled", time: { released: NOW - 72 * HOUR } }),
+        ],
+        cfg,
+        NOW,
+      );
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.model.id).toBe("settled");
+
+      if (r.ok) {
+        const detail = r.explanation.candidates.find((entry) => entry.id === "anthropic/fresh");
+        expect(detail?.stage).toBe("selection");
+        expect(detail?.outcome).toBe("rejected");
+        expect(detail?.reasons[0]).toMatchObject({
+          code: "min-age",
+          message: expect.stringContaining("minAge>=2d"),
+        });
+      }
+    });
+
+    it("el umbral es inclusivo: liberado exactamente minAge antes es elegible", () => {
+      const cfg = ageAlias("48h");
+      const r = resolveLatest(
+        [candidate({ id: "exact", time: { released: NOW - 48 * HOUR } })],
+        cfg,
+        NOW,
+      );
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.model.id).toBe("exact");
+    });
+
+    it("nadie cumple minAge: no-eligible en selection con razon sin ids", () => {
+      const cfg = ageAlias("7d");
+      const r = resolveLatest(
+        [
+          candidate({ id: "a", time: { released: NOW - HOUR } }),
+          candidate({ id: "b", time: { released: NOW - 2 * HOUR } }),
+        ],
+        cfg,
+        NOW,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.failure.kind).toBe("no-eligible");
+        expect(r.failure.reason).toContain("minimum age");
+        expect(r.failure.reason).toContain("minAge>=7d");
+        // Non-sensitive: no candidate ids or providers.
+        expect(r.failure.reason).not.toContain("anthropic");
+      }
+
+      // Everyone passed filtering (stage counts: matching kept 2, filtering kept 2).
+      const explanation = r.explanation;
+      expect(explanation.failure?.stage).toBe("selection");
+      const byStage = new Map(explanation.stages.map((stage) => [stage.name, stage.accepted]));
+      expect(byStage.get("matching")).toBe(2);
+      expect(byStage.get("filtering")).toBe(2);
+    });
+
+    it("un minAge de dias se formatea como dias en el diagnostico", () => {
+      const cfg = ageAlias("2d");
+      const r = resolveLatest(
+        [candidate({ id: "young", time: { released: NOW - HOUR } })],
+        cfg,
+        NOW,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.failure.reason).toContain("minAge>=2d");
+      const detail = r.explanation.candidates[0];
+      expect(detail?.reasons[0]).toMatchObject({
+        code: "min-age",
+        message: expect.stringContaining("minAge>=2d"),
+      });
+    });
+
+    it("timestamps ausentes o invalidos siguen rechazados aunque minAge este configurado", () => {
+      const cfg = ageAlias("1h");
+      const r = resolveLatest(
+        [
+          candidate({ id: "missing", time: { released: 0 } }),
+          candidate({ id: "invalid", time: { released: Number.NaN } }),
+        ],
+        cfg,
+        NOW,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.failure.kind).toBe("missing-metadata");
+        expect(r.failure.reason).toContain("time.released");
+      }
+    });
+
+    it("sin minAge la resolucion usa el now por defecto y no cambia", () => {
+      const cfg = alias({ "anthropic/x": { match: "anthropic/**" } });
+      const r = resolveLatest(
+        [
+          candidate({ id: "old", time: { released: NOW - 100 * HOUR } }),
+          candidate({ id: "new", time: { released: NOW } }),
+        ],
+        cfg,
+        NOW,
+      );
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.model.id).toBe("new");
+    });
+  });
 });

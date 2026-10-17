@@ -344,6 +344,92 @@ describe("normalizeOptions", () => {
     }
   });
 
+  it("filter.minAge acepta horas y dias y normaliza a milisegundos", () => {
+    const cases: Array<[string, number]> = [
+      ["1h", 3_600_000],
+      ["48h", 172_800_000],
+      ["36h", 129_600_000],
+      ["1d", 86_400_000],
+      ["3d", 259_200_000],
+      ["100h", 360_000_000],
+    ];
+    for (const [minAge, ms] of cases) {
+      const r = normalize(
+        optionsWith({ "anthropic/a": { match: "anthropic/**", filter: { minAge } } }),
+      );
+      expect(r.ok, minAge).toBe(true);
+      if (r.ok) expect(r.config.aliases[0]?.minAgeMs, minAge).toBe(ms);
+    }
+
+    // Omitido y filtro ausente: sin minAge.
+    const none = normalize(
+      optionsWith({
+        "anthropic/a": { match: "anthropic/**", filter: { minContext: 1 } },
+        "anthropic/b": { match: "anthropic/**" },
+      }),
+    );
+    expect(none.ok).toBe(true);
+    if (none.ok) {
+      expect(none.config.aliases[0]?.minAgeMs).toBeUndefined();
+      expect(none.config.aliases[1]?.minAgeMs).toBeUndefined();
+    }
+  });
+
+  it("filter.minAge rechaza cadenas malformadas, cero, unidades ajenas y no-strings", () => {
+    const bad: unknown[] = [
+      "0h",
+      "0d",
+      "-1h",
+      "1.5h",
+      " 1h",
+      "1h ",
+      "1 m",
+      "1m",
+      "48s",
+      "1w",
+      "H",
+      "",
+      "1H",
+      "01h",
+      "1.d",
+      "48",
+      48,
+      48.5,
+      true,
+      null,
+      {},
+      [],
+    ];
+    for (const minAge of bad) {
+      const r = normalize(
+        optionsWith({ "anthropic/a": { match: "anthropic/**", filter: { minAge } } }),
+      );
+      expect(r.ok, JSON.stringify(minAge)).toBe(false);
+      if (!r.ok) {
+        expect(r.failure.kind).toBe("parse-error");
+        expect(r.failure.reason).toContain("filter.minAge");
+      }
+    }
+  });
+
+  it("filter.minAge rechaza el overflow al convertir a milisegundos", () => {
+    const huge = normalize(
+      optionsWith({
+        "anthropic/a": { match: "anthropic/**", filter: { minAge: "99999999999999999h" } },
+      }),
+    );
+    expect(huge.ok).toBe(false);
+    if (!huge.ok) expect(huge.failure.reason).toContain("too large");
+
+    const hugeDays = normalize(
+      optionsWith({
+        "anthropic/a": { match: "anthropic/**", filter: { minAge: "999999999999999d" } },
+      }),
+    );
+    expect(hugeDays.ok).toBe(false);
+    if (!hugeDays.ok) expect(hugeDays.failure.reason).toContain("too large");
+  });
+
   it("filter combina status, capabilities y minContext en un mismo alias", () => {
     const ok = normalize(
       optionsWith({

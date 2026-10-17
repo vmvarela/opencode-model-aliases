@@ -16,7 +16,7 @@ const ALLOWED_STATUSES: ReadonlySet<string> = new Set(["active", "alpha", "beta"
 /** Keys accepted per configuration level; anything else is a typo and is rejected. */
 const ROOT_KEYS: readonly string[] = ["aliases", "strict", "debug"];
 const ALIAS_KEYS: readonly string[] = ["match", "exclude", "filter", "select", "name"];
-const FILTER_KEYS: readonly string[] = ["status", "capabilities", "minContext"];
+const FILTER_KEYS: readonly string[] = ["status", "capabilities", "minContext", "minAge"];
 const CAPABILITY_KEYS: readonly string[] = ["tools", "input", "output"];
 
 /**
@@ -217,6 +217,38 @@ function normalizeMinContext(value: unknown, context: string): number | undefine
   return value;
 }
 
+const MIN_AGE_PATTERN = /^[1-9][0-9]*(h|d)$/;
+const HOUR_MS = 3_600_000;
+const DAY_MS = 86_400_000;
+
+/**
+ * Minimum candidate age: `<positive integer>` + `h`|`d`, normalized to
+ * milliseconds. Malformed strings and durations overflowing a safe integer
+ * number of milliseconds are rejected.
+ */
+function normalizeMinAge(value: unknown, context: string): number | undefined | ResolveFailure {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !MIN_AGE_PATTERN.test(value)) {
+    return failure(
+      "parse-error",
+      `${context}: filter.minAge must be a positive duration like "48h" or "3d"`,
+    );
+  }
+  const hours = value.endsWith("h");
+  const digits = value.slice(0, -1);
+  // The pattern already guarantees digits and a non-zero lead; keep both
+  // operands exact (<= 15 digits) so the multiplication below is checked, not
+  // silently rounded.
+  if (digits.length > 15) {
+    return failure("parse-error", `${context}: filter.minAge "${value}" is too large`);
+  }
+  const ms = Number(digits) * (hours ? HOUR_MS : DAY_MS);
+  if (!Number.isSafeInteger(ms)) {
+    return failure("parse-error", `${context}: filter.minAge "${value}" is too large`);
+  }
+  return ms;
+}
+
 function normalizeSelect(value: unknown, context: string): { strategy: "latest" } | ResolveFailure {
   if (value === undefined) return { strategy: "latest" };
   if (!isPlainObject(value)) {
@@ -291,6 +323,8 @@ function normalizeAlias(key: string, value: unknown): NormalizedAlias | ResolveF
     context,
   );
   if (isFailure(minContext)) return minContext;
+  const minAge = normalizeMinAge(isPlainObject(filter) ? filter.minAge : undefined, context);
+  if (isFailure(minAge)) return minAge;
   const select = normalizeSelect(value.select, context);
   if ("kind" in select) return select;
   const name = value.name;
@@ -309,6 +343,7 @@ function normalizeAlias(key: string, value: unknown): NormalizedAlias | ResolveF
     statuses,
     ...(capabilities ? { capabilities } : {}),
     ...(minContext !== undefined ? { minContext } : {}),
+    ...(minAge !== undefined ? { minAgeMs: minAge } : {}),
     name: name === undefined ? key : name,
     nameExplicit: name !== undefined,
   };

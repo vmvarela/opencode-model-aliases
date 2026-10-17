@@ -72,10 +72,12 @@ function replay(
   }
 
   // One resolution per alias; the same decision serves the strict preflight
-  // and materialization.
+  // and materialization. One clock reading per replay: every alias in the
+  // same replay ages uniformly even if resolution is slow.
+  const now = Date.now();
   const results = config.aliases.map((alias) => ({
     alias,
-    result: resolveLatest(snapshot, alias),
+    result: resolveLatest(snapshot, alias, now),
   }));
 
   if (preflight && config.strict) {

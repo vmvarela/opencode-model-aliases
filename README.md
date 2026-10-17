@@ -90,6 +90,27 @@ as its key: an alias never selects a model from another provider.
 }
 ```
 
+**Wait for releases to settle** — skip models released less than a day ago, in
+`.opencode/opencode-model-aliases.jsonc`:
+
+```jsonc
+// .opencode/opencode-model-aliases.jsonc — wait for releases to settle
+{
+  "$schema": "https://raw.githubusercontent.com/vmvarela/opencode-model-aliases/master/schema.json",
+  "aliases": {
+    "openai/gpt-current": {
+      "match": "openai/gpt-*-sol",
+      "filter": { "minAge": "1d" }
+    }
+  }
+}
+```
+
+Filenames like `-sol-2026-10` are matched immediately, but a model younger than the
+configured age is skipped until the next check; the plugin only re-resolves at startup and
+on catalog refreshes, so a candidate crossing the age threshold on its own never switches
+the target.
+
 **Pick a model per job** in `opencode.json`: filter the free set by what each job needs,
 then point agents at the aliases:
 
@@ -134,8 +155,11 @@ When the plugin starts and at every catalog refresh, each alias:
    missing metadata fails the filter that needs it.
 3. **Selects** the newest `time.released`. Ties use the descending model ID
    (`gpt-6.1-sol-pro` beats `gpt-6.1-sol-fast`). Models without release dates never win.
+   With `filter.minAge`, candidates younger than the configured age are skipped here too —
+   so an alias can wait for a release to settle before adopting it.
 
-Selection is deterministic: same catalog, same rules, same winner. The alias gets a copy of
+Selection is deterministic: same catalog, same rules and same resolution time (captured
+once per refresh), same winner. The alias gets a copy of
 the winner's model info under the alias ID; declaration order doesn't matter.
 
 ## Options
@@ -150,6 +174,7 @@ the winner's model info under the alias ID; declaration order doesn't matter.
 | `filter.status` | `["active"]` | Any of `active`, `alpha`, `beta`. |
 | `filter.capabilities` | none | `tools` (boolean), `input`/`output` (all listed modalities required). |
 | `filter.minContext` | none | Minimum context window, inclusive. |
+| `filter.minAge` | none | Minimum candidate age as `<hours>h` or `<days>d` (e.g. `"48h"`, `"3d"`); models released more recently are skipped, threshold inclusive. |
 | `name` | generated | Display name. Without it, `sonnet` becomes `Sonnet (alias)`. |
 | `select` | `latest` | Only `{ "strategy": "latest" }` is supported. |
 

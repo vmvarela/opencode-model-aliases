@@ -30,6 +30,12 @@ export interface FilterOptions {
   capabilities?: CapabilityRequirement;
   /** Minimum context window: limit.context must be >= this value. */
   minContext?: number;
+  /**
+   * Minimum age of candidates as a positive duration string (`"48h"`, `"3d"`);
+   * `now - time.released` must be >= the duration. Normalized to
+   * `minAgeMs` on `NormalizedAlias`.
+   */
+  minAge?: string;
 }
 
 export interface SelectOptions {
@@ -102,6 +108,8 @@ export interface NormalizedAlias {
   readonly capabilities?: CapabilityRequirement;
   /** Minimum context window; undefined when not configured. */
   readonly minContext?: number;
+  /** Minimum candidate age in milliseconds; undefined when not configured. */
+  readonly minAgeMs?: number;
   /** Configured name or, when omitted, the key itself. */
   readonly name: string;
   /** true only when the user configured `name` explicitly. */
