@@ -33,6 +33,7 @@ function policyID(alias: NormalizedAlias): string {
     [...(alias.capabilities?.input ?? [])].sort(),
     [...(alias.capabilities?.output ?? [])].sort(),
     alias.minContext ?? null,
+    alias.minAgeMs ?? null,
     "latest",
   ]);
 }

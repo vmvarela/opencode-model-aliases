@@ -60,7 +60,12 @@
           "items": { "type": "string", "enum": ["active", "alpha", "beta"] }
         },
         "capabilities": { "$ref": "#/definitions/capabilities" },
-        "minContext": { "type": "integer", "minimum": 1 }
+        "minContext": { "type": "integer", "minimum": 1 },
+        "minAge": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*(h|d)$",
+          "description": "Minimum candidate age in whole hours or days, e.g. \"48h\" or \"3d\"; models released more recently are not eligible. Upper bound on magnitude is enforced at runtime."
+        }
       }
     },
     "capabilities": {

@@ -172,6 +172,15 @@ describe("field constraints", () => {
     expectInvalid(alias("a/m", { match: "a/**", filter: { minContext: "1" } }), "must be integer");
   });
 
+  it("filter.minAge is a positive h/d duration string", () => {
+    expectValid(alias("a/m", { match: "a/**", filter: { minAge: "48h" } }));
+    expectValid(alias("a/m", { match: "a/**", filter: { minAge: "3d" } }));
+    expectInvalid(alias("a/m", { match: "a/**", filter: { minAge: "0h" } }), "must match pattern");
+    expectInvalid(alias("a/m", { match: "a/**", filter: { minAge: "1m" } }), "must match pattern");
+    expectInvalid(alias("a/m", { match: "a/**", filter: { minAge: "1H" } }), "must match pattern");
+    expectInvalid(alias("a/m", { match: "a/**", filter: { minAge: 48 } }), "must be string");
+  });
+
   it("select, when present, is exactly { strategy: 'latest' }", () => {
     expectInvalid(
       alias("a/m", { match: "a/**", select: {} }),
@@ -240,6 +249,7 @@ const validWithoutMetadata: unknown[] = [
     name: "Float",
   }),
   { aliases: {}, strict: true, debug: false },
+  alias("anthropic/float", { match: "anthropic/**", filter: { minAge: "3d" } }),
   { aliases: { "anthropic/float": { match: "anthropic/**", filter: { capabilities: {} } } } },
 ];
 
@@ -257,6 +267,8 @@ const invalidDocs: unknown[] = [
   alias("a/m", { match: "a/**", filter: { capabilities: { input: [] } } }),
   alias("a/m", { match: "a/**", filter: { minContext: 0 } }),
   alias("a/m", { match: "a/**", filter: { minContext: 1.5 } }),
+  alias("a/m", { match: "a/**", filter: { minAge: "0h" } }),
+  alias("a/m", { match: "a/**", filter: { minAge: 48 } }),
   alias("a/m", { match: "a/**", select: {} }),
   alias("a/m", { match: "a/**", select: { strategy: "oldest" } }),
   alias("a/m", { match: "a/**", name: "" }),
