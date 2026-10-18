@@ -59,7 +59,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
-    "@opencode/plugin": "2.0.25",
+    "@opencode/plugin": "2.0.30",
     "@types/node": "^26.6.3",
     "@types/picomatch": "4.0.3",
     "ajv": "8.20.0",
