@@ -165,6 +165,73 @@ describe("resolution explanation", () => {
   });
 });
 
+describe("ordered selection policies in explanations", () => {
+  function modelOf(id: string, overrides: Partial<Candidate> = {}): Candidate {
+    return {
+      id,
+      providerID: "p",
+      enabled: true,
+      status: "active",
+      time: { released: 1000 },
+      ...overrides,
+    };
+  }
+  function resolveWith(
+    models: Candidate[],
+    options: Partial<AliasConfig>,
+    signals?: Parameters<typeof resolveLatest>[3],
+  ) {
+    const normalized = normalizeOptions({ aliases: { "p/alias": { match: "p/m*", ...options } } });
+    if (!normalized.ok || !normalized.config.aliases[0]) throw new Error("Invalid fixture");
+    return resolveLatest(models, normalized.config.aliases[0], Date.now(), signals);
+  }
+
+  it("records the ordered policy and explains every side of a criterion decision", () => {
+    const result = resolveWith(
+      [modelOf("m-1"), modelOf("m-2", { time: { released: 100 } })],
+      { select: { strategy: ["best", "cheapest", "latest"] } },
+      {
+        best: new Map([
+          ["p/m-1", 9],
+          ["p/m-2", 9],
+        ]),
+        cheapest: new Map([["p/m-1", 1]]),
+      },
+    );
+    if (!result.ok) throw new Error("expected resolution");
+    expect(result.explanation.strategy).toEqual(["best", "cheapest", "latest"]);
+    // m-2 lacks cheapest data: excluded at that criterion, never ranked later.
+    // Candidates are sorted by canonical id: m-1 carries the priced signal
+    // and wins outright; m-2 lacks cheapest data and is excluded there.
+    const [first, second] = result.explanation.candidates;
+    expect(first?.outcome).toBe("selected");
+    expect(first?.reasons[0]).toMatchObject({ code: "selected" });
+    expect(second?.outcome).toBe("rejected");
+    expect(second?.reasons[0]).toMatchObject({
+      code: "missing-metadata",
+      message: "Missing or invalid comparison cost (cheapest) metadata",
+    });
+    expect(isExplainResponse({ status: "active", explanation: result.explanation })).toBe(true);
+    const overview = formatExplanationOverview({
+      status: "active",
+      explanation: result.explanation,
+    });
+    expect(overview).toContain("Strategy: best > cheapest > latest");
+    expect(formatExplanation({ status: "active", explanation: result.explanation })).toContain(
+      "Strategy: best > cheapest > latest",
+    );
+  });
+
+  it("rejects malformed ordered policies on the transport contract", () => {
+    const base = resolveWith([modelOf("m-1")], {}).explanation;
+    for (const strategy of ["latest", [], ["oldest", "latest"], "cheapest"]) {
+      const invalid = structuredClone(base) as unknown as Record<string, unknown>;
+      invalid.strategy = strategy;
+      expect(isExplainResponse({ status: "active", explanation: invalid })).toBe(false);
+    }
+  });
+});
+
 it("rejects coerced enum values and incomplete resolution outcomes", () => {
   const explanation = resolve([model("m-a")]).explanation;
   expect(isExplainResponse({ status: ["active"], explanation })).toBe(false);

@@ -89,7 +89,18 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["strategy"],
-      "properties": { "strategy": { "type": "string", "enum": ["latest"] } }
+      "properties": {
+        "strategy": {
+          "oneOf": [
+            { "type": "string", "enum": ["latest", "best", "cheapest"] },
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "enum": ["latest", "best", "cheapest"] }
+            }
+          ]
+        }
+      }
     }
   }
 }

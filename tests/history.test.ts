@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import plugin from "../src/plugin.js";
 import type { InspectReportRow } from "../src/report.js";
@@ -333,5 +334,104 @@ describe("confirmed target history", () => {
     );
     await close?.();
     expect(host.callbacks).toHaveLength(0);
+  });
+});
+
+describe("ordered selection-policy identity in history", () => {
+  const storageKey = `history-v1/${createHash("sha256")
+    .update(JSON.stringify(["/virtual/history", ""]))
+    .digest("hex")}`;
+  const targetA = { providerID: "p", catalogID: "model-a", wireModelID: "wire-a" };
+  const seed = (entry: Record<string, unknown>) => {
+    const storage = new Map<string, unknown>();
+    storage.set(storageKey, { version: 1, aliases: [entry] });
+    return storage;
+  };
+
+  it("persists the ordered policy with every confirmed baseline", async () => {
+    const storage = new Map<string, unknown>();
+    await plugin.setup(harness(storage).ctx);
+    const saved = storage.get(storageKey) as { aliases: Array<Record<string, unknown>> };
+    expect(saved.aliases[0]).toMatchObject({ key: "p/latest", strategy: ["latest"] });
+  });
+
+  it("legacy entries without a strategy mean [latest] and stay valid under the same policy", async () => {
+    const legacy = { key: "p/latest", policy: "pre-#46-hash", target: targetA };
+    const storage = seed(legacy);
+    const host = harness(storage);
+    await plugin.setup(host.ctx);
+    // Baseline is kept: no transition on restart, and no rewrite happens.
+    expect((await rows(host))[0]?.transition).toBeUndefined();
+    const untouched = JSON.parse(JSON.stringify(storage.get(storageKey)));
+    expect((await rows(host))[0]?.transition).toBeUndefined();
+    expect(storage.get(storageKey)).toEqual(untouched);
+    expect(untouched).toEqual({ version: 1, aliases: [legacy] });
+    // A changed strategy resets the legacy baseline: the entry is dropped and
+    // the next read persists the canonicalized (empty) state.
+    const reset = createHarness({
+      storage,
+      sources: [A()],
+      options: {
+        aliases: { "p/latest": { match: "p/model-*", select: { strategy: "cheapest" } } },
+      },
+      directory: "/virtual/history",
+    });
+    await plugin.setup(reset.ctx);
+    await vi.waitFor(() =>
+      expect((storage.get(storageKey) as { aliases: unknown[]; version: number }).aliases).toEqual(
+        [],
+      ),
+    );
+  });
+
+  it("a malformed persisted strategy is rejected, never treated as legacy", async () => {
+    const storage = seed({
+      key: "p/latest",
+      policy: "hash",
+      strategy: "cheapest",
+      target: targetA,
+    });
+    const host = harness(storage, [B()]);
+    await plugin.setup(host.ctx);
+    // Without the (dropped) baseline the new target is confirmed silently.
+    expect((await rows(host))[0]?.transition).toBeUndefined();
+    expect((await rows(host))[0]?.target).toBe("model-b");
+    // And the persisted state is rewritten under the valid shape.
+    const savedAt = host.storage.get(storageKey) as {
+      aliases: Array<{ strategy?: unknown }>;
+    };
+    expect(savedAt.aliases[0]?.strategy).toEqual(["latest"]);
+  });
+
+  it("retains an entry whose stored ordered policy matches, resets otherwise", async () => {
+    const base = { key: "p/latest", policy: "hash", target: targetA };
+    // Same policy in the same order: kept without a rewrite.
+    const kept = seed({ ...base, strategy: ["best", "latest"] });
+    const keptHost = createHarness({
+      storage: kept,
+      sources: [],
+      options: { aliases: { "p/latest": { match: "p/model-*", select: { strategy: "best" } } } },
+      directory: "/virtual/history",
+    });
+    await plugin.setup(keptHost.ctx);
+    expect(kept.get(storageKey)).toEqual({
+      version: 1,
+      aliases: [{ ...base, strategy: ["best", "latest"] }],
+    });
+
+    // Order matters: a pure reversal of the same criteria resets the
+    // baseline too — ["best", "latest"] -> ["latest", "best"].
+    const reordered = createHarness({
+      storage: kept,
+      sources: [],
+      options: {
+        aliases: { "p/latest": { match: "p/model-*", select: { strategy: ["latest", "best"] } } },
+      },
+      directory: "/virtual/history",
+    });
+    await plugin.setup(reordered.ctx);
+    await vi.waitFor(() =>
+      expect((kept.get(storageKey) as { aliases: unknown[]; version: number }).aliases).toEqual([]),
+    );
   });
 });

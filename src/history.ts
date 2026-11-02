@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Plugin } from "@opencode/plugin";
-import { isPlainObject, type NormalizedAlias } from "./config.js";
+import { isPlainObject, type NormalizedAlias, type SelectionStrategy } from "./config.js";
 import type { AliasReportRow } from "./report.js";
 import { type AliasTransition, isAliasTransition } from "./transition.js";
 
@@ -12,18 +12,29 @@ type Target = {
 type Entry = {
   key: string;
   policy: string;
+  /** Ordered selection policy the target was confirmed under. */
+  strategy: readonly string[];
   target: Target;
   transition?: AliasTransition;
 };
+
+/** Strategies admitted in persisted entries; anything else is malformed. */
+const STRATEGIES: ReadonlySet<string> = new Set(["latest", "best", "cheapest"]);
+
+/** Legacy entries (pre-#46) persisted no strategy: they mean ["latest"]. */
+const LEGACY_STRATEGY: readonly SelectionStrategy[] = ["latest"];
 
 function hash(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
-/** Informational hash of the selection policy that confirmed the target.
- *  Configuration changes never invalidate history because of it: entries are
- *  identified by alias key and location, and the policy hash is only recorded
- *  for diagnostics when a new target is confirmed. */
+/**
+ * Informational hash of the alias policy that confirmed the target, including
+ * the ordered selection policy. `policyID` is diagnostic: configuration
+ * changes never invalidate history because of it — entries are identified by
+ * alias key and location, and the ordered strategy change alone has its own
+ * baseline-reset rule below.
+ */
 function policyID(alias: NormalizedAlias): string {
   return hash([
     [...alias.match].sort(),
@@ -34,8 +45,22 @@ function policyID(alias: NormalizedAlias): string {
     [...(alias.capabilities?.output ?? [])].sort(),
     alias.minContext ?? null,
     alias.minAgeMs ?? null,
-    "latest",
+    [...alias.strategy],
   ]);
+}
+
+/** Same length and same order; the policy order is part of the identity. */
+function sameStrategy(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((entry, index) => entry === b[index]);
+}
+
+/** A persisted strategy must be a non-empty array of supported criteria. */
+function isStrategyList(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((entry) => typeof entry === "string" && STRATEGIES.has(entry))
+  );
 }
 
 function isTarget(value: unknown): value is Target {
@@ -55,23 +80,34 @@ export async function createHistory(
 ) {
   const storageKey = `history-v1/${hash([location.directory ?? "", location.workspaceID ?? ""])}`;
   const policies = new Map(aliases.map((alias) => [alias.key, policyID(alias)]));
+  const strategies = new Map(aliases.map((alias) => [alias.key, alias.strategy]));
   const entries = new Map<string, Entry>();
   let dirty = false;
   try {
     const saved = await storage.get(storageKey);
     if (isPlainObject(saved) && saved.version === 1 && Array.isArray(saved.aliases)) {
       for (const value of saved.aliases) {
-        // A confirmed target survives policy/configuration changes: the alias
-        // key and location identify the entry. Keys no longer configured are
+        // A confirmed target survives configuration changes: the alias key
+        // and location identify the entry. Keys no longer configured are
         // garbage collected (alias deletion, malformed shapes).
         if (
           !isPlainObject(value) ||
           typeof value.key !== "string" ||
           typeof value.policy !== "string" ||
-          !policies.has(value.key) ||
+          !strategies.has(value.key) ||
           !isTarget(value.target)
         )
           continue;
+        // Entries persisted before #46 have no strategy and mean ["latest"]:
+        // they only survive while the configuration still holds that policy.
+        // A present but malformed value is unusable, never treated as legacy.
+        const storedStrategy =
+          value.strategy === undefined ? LEGACY_STRATEGY : (value.strategy as unknown);
+        if (!isStrategyList(storedStrategy)) continue;
+        // An ordered strategy change alone resets the alias baseline: the
+        // entry (target and transition) is dropped and re-confirmed from
+        // scratch. Other policy changes keep the target as-is.
+        if (!sameStrategy(storedStrategy, strategies.get(value.key) ?? [])) continue;
         // Copy only public, validated fields from untrusted JSON.
         const target = value.target;
         // A transition inconsistent with its own target makes the whole entry
@@ -86,6 +122,7 @@ export async function createHistory(
         entries.set(value.key, {
           key: value.key,
           policy: value.policy,
+          strategy: [...storedStrategy],
           target: {
             providerID: target.providerID,
             catalogID: target.catalogID,
@@ -124,9 +161,21 @@ export async function createHistory(
      */
     reconfigure(aliases: readonly NormalizedAlias[]) {
       policies.clear();
-      for (const alias of aliases) policies.set(alias.key, policyID(alias));
+      strategies.clear();
+      for (const alias of aliases) {
+        policies.set(alias.key, policyID(alias));
+        strategies.set(alias.key, alias.strategy);
+      }
       for (const key of [...entries.keys()]) {
-        if (!policies.has(key)) {
+        // Pruned keys (no longer configured) and kept keys whose ordered
+        // selection policy changed both reset the alias baseline: the entry
+        // is dropped here and re-confirmed from scratch by a later read,
+        // while dirty/unpersisted state of untouched entries is preserved.
+        const strategy = strategies.get(key);
+        const entry = entries.get(key);
+        const reset =
+          strategy === undefined || entry === undefined || !sameStrategy(entry.strategy, strategy);
+        if (reset) {
           entries.delete(key);
           dirty = true;
         }
@@ -154,6 +203,7 @@ export async function createHistory(
         entries.set(row.key, {
           key: row.key,
           policy,
+          strategy: [...(strategies.get(row.key) ?? [])],
           target,
           ...(previous
             ? {

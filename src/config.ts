@@ -39,8 +39,8 @@ export interface FilterOptions {
 }
 
 export interface SelectOptions {
-  /** Required when select is declared; the whole object may be omitted. */
-  strategy: "latest";
+  /** Required when select is declared; a single strategy or an ordered list. */
+  strategy: SelectionStrategy | readonly SelectionStrategy[];
 }
 
 export interface AliasConfig {
@@ -90,7 +90,14 @@ export interface Candidate {
 
 export type Checker = (id: string) => boolean;
 
-/** Normalized alias: compiled matchers + filter + strategy + name. */
+/**
+ * Supported selection criteria. The normalized policy is an ordered
+ * non-empty list: later criteria only break ties left by the previous
+ * ones, and the final tie-break is always model ID descending.
+ */
+export type SelectionStrategy = "latest" | "best" | "cheapest";
+
+/** Normalized alias: compiled matchers + filter + selection policy + name. */
 export interface NormalizedAlias {
   /** Original key `<provider>/<model>`. */
   readonly key: string;
@@ -110,6 +117,12 @@ export interface NormalizedAlias {
   readonly minContext?: number;
   /** Minimum candidate age in milliseconds; undefined when not configured. */
   readonly minAgeMs?: number;
+  /**
+   * Ordered selection policy, e.g. ["latest"] or ["best", "latest"]; an
+   * explicit array is preserved exactly, a scalar adds the deterministic
+   * "latest" fallback ("best"/"cheapest" scalar -> criterion + "latest").
+   */
+  readonly strategy: readonly SelectionStrategy[];
   /** Configured name or, when omitted, the key itself. */
   readonly name: string;
   /** true only when the user configured `name` explicitly. */

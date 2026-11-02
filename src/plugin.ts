@@ -118,7 +118,7 @@ function replay(
       // never options/headers/credentials or prompts.
       console.warn(
         `${LOG_PREFIX} [debug] alias "${sanitize(alias.key)}" -> ${sanitize(alias.provider)}/${sanitize(winner.modelID)}` +
-          ` (strategy=latest, matched=${matching?.accepted ?? 0}, eligible=${filtering?.accepted ?? 0},` +
+          ` (strategy=${alias.strategy.join(" > ")}, matched=${matching?.accepted ?? 0}, eligible=${filtering?.accepted ?? 0},` +
           ` released=${winner.time.released})`,
       );
     }

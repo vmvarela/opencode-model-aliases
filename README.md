@@ -140,8 +140,8 @@ then point agents at the aliases:
 }
 ```
 
-Filters decide **eligibility**, not quality. If several models qualify, the newest wins, so
-both aliases may currently pick the same model. `*-free` is a naming convention, not a price
+Filters decide **eligibility**, not quality. With no `select` policy, the newest model wins,
+so both aliases may currently pick the same model. `*-free` is a naming convention, not a price
 check. Only `active` models are eligible by default; opt into `alpha`/`beta` via
 `filter.status`.
 
@@ -153,13 +153,41 @@ When the plugin starts and at every catalog refresh, each alias:
    ([picomatch](https://github.com/micromatch/picomatch) globs).
 2. **Filters** by `enabled`, status, capabilities and `minContext`. All filters must pass;
    missing metadata fails the filter that needs it.
-3. **Selects** the newest `time.released`. Ties use the descending model ID
-   (`gpt-6.1-sol-pro` beats `gpt-6.1-sol-fast`). Models without release dates never win.
-   With `filter.minAge`, candidates younger than the configured age are skipped here too —
-   so an alias can wait for a release to settle before adopting it.
+3. **Selects** by `select.strategy` in order (default: `latest`). Later criteria break only
+   ties: `latest` sorts by release date descending, `best` by quality signal descending, and
+   `cheapest` by comparison cost ascending. The final tie-break is model ID descending
+   (`gpt-6.1-sol-pro` beats `gpt-6.1-sol-fast`).
 
-Selection is deterministic: same catalog, same rules and same resolution time (captured
-once per refresh), same winner. The alias gets a copy of
+For example, this policy ranks by `best`, then uses price to break quality ties, then release
+date:
+
+```json
+{
+  "aliases": {
+    "opencode/good-value": {
+      "match": "opencode/*",
+      "select": { "strategy": ["best", "cheapest", "latest"] }
+    }
+  }
+}
+```
+
+This example shows the ordering mechanics only (#46). The rating and pricing signal providers
+are separate, still-open features ([#44](https://github.com/vmvarela/opencode-model-aliases/issues/44),
+[#45](https://github.com/vmvarela/opencode-model-aliases/issues/45)) and are not wired into this
+plugin yet: until they ship, an alias whose `best`/`cheapest` criterion finds no usable signal
+value stays unresolved, and with `strict: true` such an alias fails startup.
+
+A criterion is evaluated only for the current tied group. Candidates without a usable value
+for that criterion are excluded from the group; if none has a usable value, the alias remains
+unresolved rather than inventing a score or skipping the criterion. Once one candidate remains,
+later criteria are unnecessary. `best` and `cheapest` require their corresponding quality and
+pricing signals to be available. Models without release dates cannot win when `latest` is
+reached. With `filter.minAge`, candidates younger than the configured age are skipped before
+ranking, so an alias can wait for a release to settle before adopting it.
+
+Selection is deterministic: same catalog, same criterion signals, same rules and same
+resolution time (captured once per refresh), same winner. The alias gets a copy of
 the winner's model info under the alias ID; declaration order doesn't matter.
 
 ## Options
@@ -176,7 +204,7 @@ the winner's model info under the alias ID; declaration order doesn't matter.
 | `filter.minContext` | none | Minimum context window, inclusive. |
 | `filter.minAge` | none | Minimum candidate age as `<hours>h` or `<days>d` (e.g. `"48h"`, `"3d"`); models released more recently are skipped, threshold inclusive. |
 | `name` | generated | Display name. Without it, `sonnet` becomes `Sonnet (alias)`. |
-| `select` | `latest` | Only `{ "strategy": "latest" }` is supported. |
+| `select` | `latest` | Scalar or ordered list of `latest`, `best`, and `cheapest`; scalar `best`/`cheapest` fall back to `latest`. |
 
 Aliases can also live in `.opencode/opencode-model-aliases.jsonc` (JSONC comments and
 trailing commas are fine); the plugin uses the nearest file found from the working directory
@@ -222,9 +250,12 @@ Explanations reflect the catalog visible to the plugin transform. With `strict: 
   sets a silent baseline and adding a new alias stays silent too; only an actual target
   change creates a notice — the TUI displays a toast and `/model-aliases` shows the
   previous target, new target, and detection timestamp. Edits whose winner stays the same
-  (cosmetic or unchanged ones) never create a new notice. Inline plugin options reload
-  with the host configuration; editing `.opencode/opencode-model-aliases.jsonc` takes
-  effect on `/model-aliases reload` (or restart).
+  (cosmetic or unchanged ones) never create a new notice. Changing the normalized ordered
+  selection policy (`select.strategy`) is different: it resets the baseline, so the next
+  confirmed target is silent again. Every other configuration edit preserves confirmed
+  target history. Inline plugin options reload with the host configuration; editing
+  `.opencode/opencode-model-aliases.jsonc` takes effect on `/model-aliases reload` (or
+  restart).
 - **Plugin ordering:** The plugin resolves against the fresh catalog and observes subsequent `model.updated` events. If a downstream plugin rewrites an alias `modelID`, the inspect report can return `unavailable`. Do not rely on plugin execution order.
 
 ## Troubleshooting
@@ -245,7 +276,11 @@ Explanations reflect the catalog visible to the plugin transform. With `strict: 
   With `strict: true`, startup fails instead. Strict applies at startup only: after a
   successful startup, a target loss skips only that alias, and it recovers when a matching
   model returns.
-- Only the `latest` strategy exists; the plugin can't rank by price or quality. Aliases are
+- The plugin ranks only by `select.strategy` (`latest`, `best`, `cheapest`) and never invents
+  scores or prices. The quality ([#44](https://github.com/vmvarela/opencode-model-aliases/issues/44))
+  and pricing ([#45](https://github.com/vmvarela/opencode-model-aliases/issues/45)) signal
+  providers are still open and are not wired in yet, so aliases that reach such a criterion
+  without a usable signal remain unresolved. Aliases are
   provider-isolated and never chain, and the plugin only reads OpenCode's catalog — it never
   fetches external model lists.
 - Models hidden with `disabled: true` in your OpenCode provider config can still be selected

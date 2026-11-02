@@ -22,7 +22,11 @@ const RELOAD_SUCCESS_MESSAGE = "Model aliases reloaded.";
 const RELOAD_REJECTED_MESSAGE = "Reload was rejected. Check the configuration or OpenCode logs.";
 const RELOAD_ERROR_MESSAGE = "Unable to reload model aliases. Please try again.";
 
-export type InspectResponseRow = InspectReportRow;
+export type InspectStrategy = "latest" | "best" | "cheapest";
+
+export type InspectResponseRow = Omit<InspectReportRow, "strategy"> & {
+  readonly strategy: readonly InspectStrategy[];
+};
 
 export interface InspectResponse {
   readonly text: string;
@@ -39,6 +43,10 @@ export function isReloadResponse(value: unknown): value is ReloadResponse {
   return res.status === "reloaded" || res.status === "rejected";
 }
 
+function isStrategy(value: unknown): value is InspectStrategy {
+  return value === "latest" || value === "best" || value === "cheapest";
+}
+
 function isInspectRow(value: unknown): value is InspectResponseRow {
   if (typeof value !== "object" || value === null) return false;
   const row = value as Record<string, unknown>;
@@ -49,7 +57,9 @@ function isInspectRow(value: unknown): value is InspectResponseRow {
     typeof row.displayName !== "string" ||
     typeof row.provider !== "string" ||
     typeof row.alias !== "string" ||
-    row.strategy !== "latest" ||
+    !Array.isArray(row.strategy) ||
+    row.strategy.length === 0 ||
+    !row.strategy.every(isStrategy) ||
     (row.status !== "active" && row.status !== "inactive" && row.status !== "unresolved")
   ) {
     return false;
@@ -87,13 +97,14 @@ function notificationStorageKey(scope: string): string {
 
 export function formatDetailMessage(row: InspectResponseRow): string {
   const lines: string[] = [`Alias: ${row.key}`, `Name: ${row.displayName}`];
+  const strategy = `Strategy: ${row.strategy.join(" > ")}`;
 
   if (row.alias !== row.displayName) {
     lines.push(`Alias model ID: ${row.alias}`);
   }
 
   if (row.status === "unresolved") {
-    lines.push(`Strategy: ${row.strategy}`);
+    lines.push(strategy);
     const kind = row.failureKind ? ` (${row.failureKind})` : "";
     lines.push(`Status: unresolved${kind}`);
     if (row.failureReason) {
@@ -108,7 +119,7 @@ export function formatDetailMessage(row: InspectResponseRow): string {
     if (row.wireModelID !== undefined && row.wireModelID !== row.catalogID) {
       lines.push(`Wire model ID: ${row.wireModelID}`);
     }
-    lines.push(`Strategy: ${row.strategy}`);
+    lines.push(strategy);
     lines.push(
       row.status === "active" ? "Status: active" : "Status: inactive (not in final catalog)",
     );

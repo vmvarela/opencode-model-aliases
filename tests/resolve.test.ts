@@ -530,6 +530,7 @@ describe("resolveLatest", () => {
       includes: [() => true],
       excludes: [],
       statuses: ["active"],
+      strategy: ["latest"],
       name: "anthropic/x",
       nameExplicit: false,
     };
@@ -685,6 +686,499 @@ describe("resolveLatest", () => {
       );
       expect(r.ok).toBe(true);
       if (r.ok) expect(r.model.id).toBe("new");
+    });
+  });
+
+  describe("ordered selection policy", () => {
+    /** Builds a signals map from a plain object keyed by canonical id. */
+    const mapOf = (values: Record<string, number>): Map<string, number> =>
+      new Map(Object.entries(values));
+
+    it("best dominates release date; scalar best attaches the deterministic latest fallback", () => {
+      for (const select of ["best" as const, ["best", "latest"] as const] as const) {
+        const cfg = alias(
+          select === "best"
+            ? { "anthropic/x": { match: "anthropic/**", select: { strategy: "best" } } }
+            : {
+                "anthropic/x": {
+                  match: "anthropic/**",
+                  select: { strategy: ["best", "latest"] },
+                },
+              },
+        );
+        const r = resolveLatest(
+          [
+            candidate({ id: "new", time: { released: 9_000 } }),
+            candidate({ id: "old", time: { released: 1_000 } }),
+          ],
+          cfg,
+          0,
+          { best: mapOf({ "anthropic/old": 9, "anthropic/new": 1 }) },
+        );
+        expect(r.ok).toBe(true);
+        if (r.ok) expect(r.model.id).toBe("old");
+      }
+    });
+
+    it("cheapest is ascending; scalar cheapest attaches the deterministic latest fallback", () => {
+      for (const select of [
+        { select: { strategy: "cheapest" as const } },
+        { select: { strategy: ["cheapest", "latest"] as const } },
+      ]) {
+        const cfg = alias({ "anthropic/x": { match: "anthropic/**", ...select } });
+        const r = resolveLatest(
+          [
+            candidate({ id: "cheap", time: { released: 1_000 } }),
+            candidate({ id: "costly", time: { released: 9_000 } }),
+          ],
+          cfg,
+          0,
+          { cheapest: mapOf({ "anthropic/cheap": 1, "anthropic/costly": 9 }) },
+        );
+        expect(r.ok).toBe(true);
+        if (r.ok) expect(r.model.id).toBe("cheap");
+      }
+    });
+
+    it("ranking is lexicographic, never a weighted blend of criteria", () => {
+      const cfg = alias({
+        "anthropic/x": {
+          match: "anthropic/**",
+          select: { strategy: ["best", "cheapest", "latest"] },
+        },
+      });
+      // new is massively cheaper and newer, but old has a strictly better
+      // quality score: best wins outright and the rest is never consulted.
+      const r = resolveLatest(
+        [
+          candidate({ id: "new", time: { released: 9_000 } }),
+          candidate({ id: "old", time: { released: 1_000 } }),
+        ],
+        cfg,
+        0,
+        {
+          best: mapOf({ "anthropic/old": 9, "anthropic/new": 8 }),
+          cheapest: mapOf({ "anthropic/old": 10_000, "anthropic/new": 1 }),
+        },
+      );
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.model.id).toBe("old");
+      if (r.ok) {
+        const winner = r.explanation.candidates.find((c) => c.outcome === "selected");
+        const loser = r.explanation.candidates.find((c) => c.outcome === "eligible");
+        expect(winner?.reasons[0]).toMatchObject({ code: "selected" });
+        expect(loser?.reasons[0]).toMatchObject({
+          code: "lower-score",
+          message: "Lower quality score than the selected candidate",
+        });
+      }
+    });
+
+    it("criterion order matters and every criterion only breaks its own ties", () => {
+      // [cheapest, best]: the cheapest models are compared by score.
+      const byCostFirst = resolveLatest(
+        [
+          candidate({ id: "a", time: { released: 3_000 } }),
+          candidate({ id: "b", time: { released: 9_000 } }),
+        ],
+        alias({
+          "anthropic/x": { match: "anthropic/**", select: { strategy: ["cheapest", "best"] } },
+        }),
+        0,
+        {
+          best: mapOf({ "anthropic/a": 1, "anthropic/b": 9 }),
+          cheapest: mapOf({ "anthropic/a": 5, "anthropic/b": 5 }),
+        },
+      );
+      expect(byCostFirst.ok).toBe(true);
+      if (byCostFirst.ok) expect(byCostFirst.model.id).toBe("b");
+
+      // [best, cheapest]: the best score wins regardless of cost.
+      const byScoreFirst = resolveLatest(
+        [
+          candidate({ id: "a", time: { released: 3_000 } }),
+          candidate({ id: "b", time: { released: 9_000 } }),
+        ],
+        alias({
+          "anthropic/x": { match: "anthropic/**", select: { strategy: ["best", "cheapest"] } },
+        }),
+        0,
+        {
+          best: mapOf({ "anthropic/a": 1, "anthropic/b": 9 }),
+          cheapest: mapOf({ "anthropic/a": 1, "anthropic/b": 9 }),
+        },
+      );
+      expect(byScoreFirst.ok).toBe(true);
+      if (byScoreFirst.ok) expect(byScoreFirst.model.id).toBe("b");
+
+      // [best, latest]: equal scores fall through to the release date.
+      const byLatestTie = resolveLatest(
+        [
+          candidate({ id: "a", time: { released: 1_000 } }),
+          candidate({ id: "b", time: { released: 5_000 } }),
+        ],
+        alias({
+          "anthropic/x": { match: "anthropic/**", select: { strategy: ["best", "latest"] } },
+        }),
+        0,
+        { best: mapOf({ "anthropic/a": 7, "anthropic/b": 7 }) },
+      );
+      expect(byLatestTie.ok).toBe(true);
+      if (byLatestTie.ok) expect(byLatestTie.model.id).toBe("b");
+    });
+
+    it("both sides of a criterion-tied ID tie-break are explained deterministically", () => {
+      // Explicit ["cheapest"]: no latest fallback, so a cost tie reaches the
+      // final model-ID tie-break.
+      const cfg = alias({
+        "anthropic/x": { match: "anthropic/**", select: { strategy: ["cheapest"] } },
+      });
+      const run = () =>
+        resolveLatest(
+          [
+            candidate({ id: "a", time: { released: 9_000 } }),
+            candidate({ id: "z", time: { released: 1_000 } }),
+          ],
+          cfg,
+          0,
+          { cheapest: mapOf({ "anthropic/a": 4, "anthropic/z": 4 }) },
+        );
+      const withOrder = (candidates: Candidate[]) =>
+        resolveLatest(candidates, cfg, 0, {
+          cheapest: mapOf({ "anthropic/a": 4, "anthropic/z": 4 }),
+        });
+      const r = run();
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(r.model.id).toBe("z");
+        const codes = r.explanation.candidates.map((c) => c.reasons.map((x) => x.code));
+        expect(codes).toEqual([["id-tiebreak"], ["id-tiebreak"]]);
+        const winner = r.explanation.candidates.find((c) => c.outcome === "selected");
+        const loser = r.explanation.candidates.find((c) => c.outcome === "eligible");
+        expect(loser?.reasons[0]?.message).toBe(
+          "Tied under the ordered policy; lost the descending model ID tie-break",
+        );
+        expect(loser?.reasons.length).toBe(1);
+        expect(winner?.reasons[0]?.message).toBe(
+          "Tied under the ordered policy; won the descending model ID tie-break",
+        );
+      }
+      // Reversed input order produces the identical deterministic resolution.
+      const reversed = withOrder([
+        candidate({ id: "z", time: { released: 1_000 } }),
+        candidate({ id: "a", time: { released: 9_000 } }),
+      ]);
+      expect(reversed.ok && reversed.model.id).toBe(r.ok ? r.model.id : undefined);
+      if (r.ok && reversed.ok) expect(reversed.explanation).toEqual(r.explanation);
+    });
+
+    it("a criterion is still required for the tied group: eliminated richer candidates are not resurrected", () => {
+      const cfg = alias({
+        "anthropic/x": { match: "anthropic/**", select: { strategy: ["latest", "best"] } },
+      });
+      // Two newest candidates tie on latest and both lack a rating; the older
+      // candidate has a valid best rating, but latest eliminated it before
+      // best was ever reached — best must still fail the alias.
+      const r = resolveLatest(
+        [
+          candidate({ id: "older", time: { released: 1_000 } }),
+          candidate({ id: "a", time: { released: 5_000 } }),
+          candidate({ id: "b", time: { released: 5_000 } }),
+        ],
+        cfg,
+        0,
+        { best: mapOf({ "anthropic/older": 9 }) },
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.failure.kind).toBe("missing-metadata");
+        expect(r.failure.reason).toBe(
+          "no eligible candidate has usable quality score (best) metadata",
+        );
+        expect(r.explanation.failure).toMatchObject({ stage: "selection" });
+      }
+      // The eliminated older candidate is not resurrected and its rating was
+      // not consulted as a fallback for the tie group.
+      const older = r.explanation.candidates.find((c) => c.id === "anthropic/older");
+      expect(older?.outcome).toBe("eligible");
+      expect(older?.reasons[0]).toMatchObject({
+        code: "older-release",
+        message: "Older release than the selected candidate",
+      });
+      expect(older?.released).toBe(1_000);
+    });
+
+    it("unusable values are NaN, Infinity and absent signal entries alike", () => {
+      const cfg = alias({
+        "anthropic/x": { match: "anthropic/**", select: { strategy: ["best", "latest"] } },
+      });
+      const r = resolveLatest(
+        [
+          candidate({ id: "inf", time: { released: 5_000 } }),
+          candidate({ id: "valid", time: { released: 1_000 } }),
+        ],
+        cfg,
+        0,
+        { best: mapOf({ "anthropic/inf": Number.POSITIVE_INFINITY, "anthropic/valid": 2 }) },
+      );
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.model.id).toBe("valid");
+      const detail = r.explanation.candidates.find((c) => c.id === "anthropic/inf");
+      expect(detail?.outcome).toBe("rejected");
+      expect(detail?.reasons[0]).toMatchObject({
+        code: "missing-metadata",
+        message: "Missing or invalid quality score (best) metadata",
+      });
+    });
+
+    it("missing values only exclude from the current tied group and never win", () => {
+      const cfg = alias({
+        "anthropic/x": {
+          match: "anthropic/**",
+          select: { strategy: ["cheapest", "best", "latest"] },
+        },
+      });
+      // "miss" has top release date and-best-way score, but no cost signal:
+      // it is excluded at cheapest and can never come back later.
+      const r = resolveLatest(
+        [
+          candidate({ id: "miss", time: { released: 9_000 } }),
+          candidate({ id: "priced", time: { released: 1_000 } }),
+        ],
+        cfg,
+        0,
+        {
+          cheapest: mapOf({ "anthropic/priced": 3 }),
+          best: mapOf({ "anthropic/miss": 99, "anthropic/priced": 1 }),
+        },
+      );
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.model.id).toBe("priced");
+      const miss = r.explanation.candidates.find((c) => c.id === "anthropic/miss");
+      expect(miss?.outcome).toBe("rejected");
+      expect(miss?.reasons[0]).toMatchObject({
+        code: "missing-metadata",
+        message: "Missing or invalid comparison cost (cheapest) metadata",
+      });
+      const priced = r.explanation.candidates.find((c) => c.id === "anthropic/priced");
+      expect(priced?.outcome).toBe("selected");
+    });
+
+    it("no tied member usable at a criterion leaves the alias unresolved without skipping it", () => {
+      // [best, latest]: everyone lacks best data; the alias must not silently
+      // fall through to latest even though dated candidates exist.
+      const bestFirst = resolveLatest(
+        [
+          candidate({ id: "a", time: { released: 9_000 } }),
+          candidate({ id: "b", time: { released: 2_000 } }),
+        ],
+        alias({
+          "anthropic/x": { match: "anthropic/**", select: { strategy: ["best", "latest"] } },
+        }),
+        0,
+      );
+      expect(bestFirst.ok).toBe(false);
+      if (!bestFirst.ok) {
+        expect(bestFirst.failure.kind).toBe("missing-metadata");
+        expect(bestFirst.failure.reason).toBe(
+          "no eligible candidate has usable quality score (best) metadata",
+        );
+      }
+      // Ordered the other way, latest does the work and succeeds.
+      const latestFirst = resolveLatest(
+        [
+          candidate({ id: "a", time: { released: 9_000 } }),
+          candidate({ id: "b", time: { released: 2_000 } }),
+        ],
+        alias({
+          "anthropic/x": { match: "anthropic/**", select: { strategy: ["latest", "best"] } },
+        }),
+        0,
+      );
+      expect(latestFirst.ok).toBe(true);
+      if (latestFirst.ok) expect(latestFirst.model.id).toBe("a");
+    });
+
+    it("once one winner remains the later criteria are not required", () => {
+      const cfg = alias({
+        "anthropic/x": { match: "anthropic/**", select: { strategy: ["best", "latest"] } },
+      });
+      // Two best-tied candidates; only "a" has a best signal, and it has no
+      // release date at all: best decides outright and latest is never asked.
+      const r = resolveLatest([candidate({ id: "a", time: { released: 0 } })], cfg, 0, {
+        best: mapOf({ "anthropic/a": 7 }),
+      });
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.model.id).toBe("a");
+    });
+
+    it("an undated candidate can still win under a policy that never evaluates latest", () => {
+      const cfg = alias({
+        "anthropic/x": { match: "anthropic/**", select: { strategy: ["cheapest"] } },
+      });
+      const r = resolveLatest(
+        [
+          candidate({ id: "undated", time: { released: Number.NaN } }),
+          candidate({ id: "dated", time: { released: 1 } }),
+        ],
+        cfg,
+        0,
+        { cheapest: mapOf({ "anthropic/undated": 1, "anthropic/dated": 2 }) },
+      );
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.model.id).toBe("undated");
+    });
+
+    it("minAge is a prefilter independent of the policy; undated candidates cannot be aged", () => {
+      const NOW = Date.UTC(2026, 0, 15, 12, 0, 0);
+      const HOUR = 3_600_000;
+      const cfg = alias({
+        "anthropic/x": {
+          match: "anthropic/**",
+          select: { strategy: ["cheapest"] },
+          filter: { minAge: "48h" },
+        },
+      });
+      // The cheaper model is undated: minAge cannot evaluate it, so even
+      // without latest in the policy it is dropped as missing metadata.
+      const r = resolveLatest(
+        [
+          candidate({ id: "cheap", time: { released: 0 } }),
+          candidate({ id: "settled", time: { released: NOW - 72 * HOUR } }),
+        ],
+        cfg,
+        NOW,
+        { cheapest: mapOf({ "anthropic/cheap": 1, "anthropic/settled": 2 }) },
+      );
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.model.id).toBe("settled");
+      const cheap = r.explanation.candidates.find((c) => c.id === "anthropic/cheap");
+      expect(cheap?.reasons[0]).toMatchObject({
+        code: "missing-metadata",
+        message: "Missing or invalid time.released timestamp",
+      });
+
+      // A priced but too-young candidate is dropped by the age prefilter.
+      const young = resolveLatest(
+        [
+          candidate({ id: "fresh", time: { released: NOW - HOUR } }),
+          candidate({ id: "settled", time: { released: NOW - 72 * HOUR } }),
+        ],
+        cfg,
+        NOW,
+        { cheapest: mapOf({ "anthropic/fresh": 1, "anthropic/settled": 99_999 }) },
+      );
+      expect(young.ok).toBe(true);
+      if (young.ok) expect(young.model.id).toBe("settled");
+      const fresh = young.explanation.candidates.find((c) => c.id === "anthropic/fresh");
+      expect(fresh?.reasons[0]).toMatchObject({ code: "min-age" });
+    });
+
+    it("exposes the ordered policy through stage counts and explanation", () => {
+      const cfg = alias({
+        "anthropic/x": {
+          match: "anthropic/**",
+          select: { strategy: ["best", "cheapest", "latest"] },
+        },
+      });
+      const r = resolveLatest([candidate({ id: "only", time: { released: 5 } })], cfg, 0, {
+        best: mapOf({ "anthropic/only": 5 }),
+      });
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.stages.map((stage) => stage.name)).toEqual(["matching", "filtering", "selection"]);
+      expect(r.stages.map((stage) => stage.accepted)).toEqual([1, 1, 1]);
+      expect(r.explanation.strategy).toEqual(["best", "cheapest", "latest"]);
+      expect(r.explanation.winner).toBe("anthropic/only");
+      const winner = r.explanation.candidates.find((c) => c.id === "anthropic/only");
+      expect(winner?.reasons[0]).toMatchObject({
+        code: "selected",
+        message: "Won the ordered policy (best > cheapest > latest)",
+      });
+      // best decided outright: latest was never evaluated, so no released
+      // value was needed for the diagnosis.
+      expect(winner?.released).toBeUndefined();
+    });
+
+    it("evaluates the remaining criteria in a tie carry-over and stamps released usage", () => {
+      const cfg = alias({
+        "anthropic/x": { match: "anthropic/**", select: { strategy: ["cheapest", "latest"] } },
+      });
+      const r = resolveLatest(
+        [
+          candidate({ id: "a", time: { released: 100 } }),
+          candidate({ id: "b", time: { released: 200 } }),
+        ],
+        cfg,
+        0,
+        { cheapest: mapOf({ "anthropic/a": 4, "anthropic/b": 4 }) },
+      );
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(r.model.id).toBe("b");
+        const winner = r.explanation.candidates.find((c) => c.id === "anthropic/b");
+        expect(winner?.released).toBe(200);
+        const loser = r.explanation.candidates.find((c) => c.id === "anthropic/a");
+        expect(loser?.reasons[0]).toMatchObject({
+          code: "older-release",
+          message: "Older release than the selected candidate",
+        });
+      }
+    });
+
+    it("latest policies ignore injected signals entirely and never leak them", () => {
+      const cfg = alias({ "anthropic/x": { match: "anthropic/**" } });
+      const input = [candidate({ id: "keep", time: { released: 2 } })];
+      const snapshot = structuredClone(input);
+      const r = resolveLatest(input, cfg, 0, {
+        best: mapOf({ "anthropic/keep": 1 }),
+        cheapest: mapOf({ "anthropic/keep": 1 }),
+      });
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(r.model).toBe(input[0]);
+        expect(input).toEqual(snapshot);
+        const serialized = JSON.stringify(r.explanation);
+        expect(serialized).not.toContain("best");
+        expect(serialized).not.toContain("cheapest");
+        expect(serialized).not.toContain("signal");
+      }
+    });
+
+    it("does not mutate the input candidates or their ordering with signals", () => {
+      const cfg = alias({ "anthropic/x": { match: "anthropic/**", select: { strategy: "best" } } });
+      const input = [
+        candidate({ id: "b", time: { released: 2 } }),
+        candidate({ id: "a", time: { released: 3 } }),
+      ];
+      const snapshot = structuredClone(input);
+      const r = resolveLatest(input, cfg, 0, {
+        best: mapOf({ "anthropic/b": 9, "anthropic/a": 1 }),
+      });
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.model.id).toBe("b");
+      expect(input).toEqual(snapshot);
+      expect([...input].map((m) => m.id)).toEqual(["b", "a"]);
+      // Returns the same object, never a clone or a derived shape.
+      if (r.ok) expect(r.model).toBe(input[0]);
+    });
+
+    it("never invents a criterion value that no signal or metadata provides", () => {
+      const cfg = alias({
+        "anthropic/x": { match: "anthropic/**", select: { strategy: ["best", "latest"] } },
+      });
+      const r = resolveLatest(
+        [
+          candidate({ id: "scoreless", time: { released: 9_000 } }),
+          candidate({ id: "scored", time: { released: 1_000 } }),
+        ],
+        cfg,
+        0,
+      );
+      // Without best signals nobody is comparable on best: unresolved, and
+      // the running candidate is never promoted.
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.failure.kind).toBe("missing-metadata");
     });
   });
 });

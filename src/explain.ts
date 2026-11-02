@@ -1,4 +1,4 @@
-import { isPlainObject } from "./config.js";
+import { isPlainObject, type SelectionStrategy } from "./config.js";
 import { sanitize } from "./report.js";
 import type { Stage } from "./resolve.js";
 
@@ -19,7 +19,8 @@ export interface CandidateExplanation {
 /** Public, primitive-only snapshot of the decisions made by one resolver run. */
 export interface ResolutionExplanation {
   alias: string;
-  strategy: "latest";
+  /** Ordered selection policy that produced the snapshot. */
+  strategy: readonly SelectionStrategy[];
   stages: Stage[];
   unmatched: number;
   candidates: CandidateExplanation[];
@@ -44,6 +45,10 @@ function count(value: unknown): boolean {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
+function isStrategy(value: unknown): value is SelectionStrategy {
+  return value === "latest" || value === "best" || value === "cheapest";
+}
+
 /** Validate the transport before rendering; the UI never evaluates selection rules. */
 export function isExplainResponse(value: unknown): value is ExplainResponse {
   if (!isPlainObject(value)) return false;
@@ -54,7 +59,9 @@ export function isExplainResponse(value: unknown): value is ExplainResponse {
   if (
     !isPlainObject(report) ||
     typeof report.alias !== "string" ||
-    report.strategy !== "latest" ||
+    !Array.isArray(report.strategy) ||
+    report.strategy.length === 0 ||
+    !report.strategy.every(isStrategy) ||
     !count(report.unmatched) ||
     !Array.isArray(report.stages) ||
     !Array.isArray(report.candidates)
@@ -122,7 +129,7 @@ export function formatExplanationOverview(
   const report = response.explanation;
   const lines = [
     `Alias: ${sanitize(report.alias)}`,
-    `Strategy: ${report.strategy}`,
+    `Strategy: ${report.strategy.join(" > ")}`,
     `Status: ${response.status}`,
     report.stages.map((stage) => `${stage.name}: ${stage.accepted}`).join(" → "),
   ];
@@ -144,7 +151,7 @@ export function formatExplanation(response: ExplainResponse): string {
   const report = response.explanation;
   const lines = [
     `Alias: ${sanitize(report.alias)}`,
-    `Strategy: ${report.strategy}`,
+    `Strategy: ${report.strategy.join(" > ")}`,
     `Status: ${response.status}`,
   ];
   lines.push(report.stages.map((stage) => `${stage.name}: ${stage.accepted}`).join(" → "));

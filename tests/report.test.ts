@@ -104,7 +104,11 @@ describe("ModelAliasesRpc contract", () => {
               provider: { type: "string" },
               displayName: { type: "string" },
               alias: { type: "string" },
-              strategy: { type: "string", enum: ["latest"] },
+              strategy: {
+                type: "array",
+                minItems: 1,
+                items: { type: "string", enum: ["latest", "best", "cheapest"] },
+              },
               status: { type: "string", enum: ["active", "inactive", "unresolved"] },
               target: { type: "string" },
               catalogID: { type: "string" },
@@ -541,7 +545,7 @@ describe("formatReport visual and structural layout", () => {
     const actual8: AliasReportRow[] = [
       {
         key: "github-copilot/gemini-flash",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Gemini Flash (alias)",
         providerID: "github-copilot",
@@ -549,7 +553,7 @@ describe("formatReport visual and structural layout", () => {
       },
       {
         key: "github-copilot/sonnet",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Sonnet (alias)",
         providerID: "github-copilot",
@@ -557,7 +561,7 @@ describe("formatReport visual and structural layout", () => {
       },
       {
         key: "openai/gpt-luna",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Gpt Luna (alias)",
         providerID: "openai",
@@ -565,7 +569,7 @@ describe("formatReport visual and structural layout", () => {
       },
       {
         key: "openai/gpt-sol",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Gpt Sol (alias)",
         providerID: "openai",
@@ -573,7 +577,7 @@ describe("formatReport visual and structural layout", () => {
       },
       {
         key: "openai/gpt-terra",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Gpt Terra (alias)",
         providerID: "openai",
@@ -581,7 +585,7 @@ describe("formatReport visual and structural layout", () => {
       },
       {
         key: "opencode-go/deepseek-flash",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Deepseek Flash (alias)",
         providerID: "opencode-go",
@@ -589,7 +593,7 @@ describe("formatReport visual and structural layout", () => {
       },
       {
         key: "opencode-go/glm-flash",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Glm Flash (alias)",
         providerID: "opencode-go",
@@ -597,7 +601,7 @@ describe("formatReport visual and structural layout", () => {
       },
       {
         key: "opencode-go/qwen-flash",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Qwen Flash (alias)",
         providerID: "opencode-go",
@@ -642,7 +646,7 @@ describe("formatReport visual and structural layout", () => {
     const rows: AliasReportRow[] = [
       {
         key: "anthropic/active-one",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Active One (alias)",
         providerID: "anthropic",
@@ -650,7 +654,7 @@ describe("formatReport visual and structural layout", () => {
       },
       {
         key: "anthropic/inactive-one",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Inactive One (alias)",
         providerID: "anthropic",
@@ -658,7 +662,7 @@ describe("formatReport visual and structural layout", () => {
       },
       {
         key: "openai/missing",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "unresolved",
         displayName: "Missing (alias)",
         failureKind: "no-eligible",
@@ -689,7 +693,7 @@ describe("formatReport visual and structural layout", () => {
     const rows: AliasReportRow[] = [
       {
         key: "github-copilot/sonnet",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Sonnet (alias)",
         providerID: "github-copilot",
@@ -707,7 +711,7 @@ describe("formatReport visual and structural layout", () => {
     const rows: AliasReportRow[] = [
       {
         key: "anthropic/solo",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Solo (alias)",
         providerID: "anthropic",
@@ -723,7 +727,7 @@ describe("formatReport visual and structural layout", () => {
     const rows: AliasReportRow[] = [
       {
         key: "anthropic/float",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Sonnet (floating)",
         providerID: "anthropic",
@@ -731,7 +735,7 @@ describe("formatReport visual and structural layout", () => {
       },
       {
         key: "anthropic/timeless",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "timeless",
         providerID: "anthropic",
@@ -751,7 +755,7 @@ describe("formatReport visual and structural layout", () => {
     const rows: AliasReportRow[] = [
       {
         key: "anthropic/claude/sonnet",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Sonnet (alias)",
         providerID: "anthropic",
@@ -766,7 +770,7 @@ describe("formatReport visual and structural layout", () => {
     const rows: AliasReportRow[] = [
       {
         key: "anthropic/bad\u001b[31m",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Bad\u001b[31m",
         providerID: "anthropic",
@@ -777,6 +781,81 @@ describe("formatReport visual and structural layout", () => {
     expect(output).toContain("Bad\\u001b[31m (bad\\u001b[31m)\n    → claude-b");
     expect(output).not.toContain("\u001b");
   });
+
+  it("muestra la política ordenada junto al objetivo y pluraliza el encabezado", () => {
+    const rows: AliasReportRow[] = [
+      {
+        key: "anthropic/latest-alias",
+        strategy: ["latest"],
+        status: "resolved",
+        displayName: "Latest (alias)",
+        providerID: "anthropic",
+        catalogID: "claude-a",
+      },
+      {
+        key: "anthropic/quality",
+        strategy: ["best", "latest"],
+        status: "resolved",
+        displayName: "Quality (alias)",
+        providerID: "imported",
+        catalogID: "claude-b",
+      },
+      {
+        key: "anthropic/void",
+        strategy: ["cheapest", "best", "latest"],
+        status: "unresolved",
+        displayName: "Void (alias)",
+        failureKind: "missing-metadata",
+        failureReason: "no eligible candidate has usable comparison cost (cheapest) metadata",
+      },
+    ];
+    const output = formatReport(rows, new Set(["anthropic/latest-alias", "anthropic/quality"]));
+    // Mixed policies: the header pluralizes and lists every distinct policy.
+    expect(output).toContain(
+      "Model aliases (strategies: best > latest, cheapest > best > latest, latest)",
+    );
+    // Plain ["latest"] rows keep the compact legacy view (no policy suffix).
+    expect(output).not.toContain("(strategy: latest)");
+    // Non-plain policies are shown beside the target, before the wire suffixes.
+    expect(output).toContain(
+      "Quality (alias) (quality)\n    → imported/claude-b (strategy: best > latest)",
+    );
+    // Unresolved rows show the policy after the failure reason.
+    expect(output).toContain(
+      "→ unresolved (missing-metadata): no eligible candidate has usable comparison cost " +
+        "(cheapest) metadata (strategy: cheapest > best > latest)",
+    );
+  });
+});
+
+describe("ordered selection policies in report primitives", () => {
+  it("carries the ordered policy verbatim into report and inspect rows without sanitization", () => {
+    const normalized = normalizeOptions({
+      aliases: {
+        "anthropic/order": {
+          match: "anthropic/**",
+          select: { strategy: ["cheapest", "best", "latest"] },
+        },
+      },
+    });
+    if (!normalized.ok) throw new Error("options should normalize");
+    const alias = normalized.config.aliases[0];
+    if (!alias) throw new Error("alias should exist");
+    const rows = buildRows([
+      {
+        alias,
+        result: {
+          ok: false,
+          failure: { kind: "missing-metadata", reason: "no eligible candidate" },
+        },
+      },
+    ]);
+    expect(rows[0]?.strategy).toEqual(["cheapest", "best", "latest"]);
+    const inspect = buildInspectRows(rows, new Set());
+    expect(inspect[0]?.strategy).toEqual(["cheapest", "best", "latest"]);
+    // The policy is built from a validated enum, never from raw input.
+    expect(JSON.stringify(inspect)).not.toContain("\\u001b");
+  });
 });
 
 describe("buildInspectRows structured public primitives", () => {
@@ -784,7 +863,7 @@ describe("buildInspectRows structured public primitives", () => {
     const actual8: AliasReportRow[] = [
       {
         key: "github-copilot/gemini-flash",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Gemini Flash (alias)",
         providerID: "github-copilot",
@@ -792,7 +871,7 @@ describe("buildInspectRows structured public primitives", () => {
       },
       {
         key: "github-copilot/sonnet",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Sonnet (alias)",
         providerID: "github-copilot",
@@ -801,7 +880,7 @@ describe("buildInspectRows structured public primitives", () => {
       },
       {
         key: "openai/gpt-luna",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Gpt Luna (alias)",
         providerID: "openai",
@@ -809,7 +888,7 @@ describe("buildInspectRows structured public primitives", () => {
       },
       {
         key: "openai/gpt-sol",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Gpt Sol (alias)",
         providerID: "openai",
@@ -817,7 +896,7 @@ describe("buildInspectRows structured public primitives", () => {
       },
       {
         key: "openai/gpt-terra",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Gpt Terra (alias)",
         providerID: "openai",
@@ -825,7 +904,7 @@ describe("buildInspectRows structured public primitives", () => {
       },
       {
         key: "opencode-go/deepseek-flash",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Deepseek Flash (alias)",
         providerID: "opencode-go",
@@ -833,7 +912,7 @@ describe("buildInspectRows structured public primitives", () => {
       },
       {
         key: "opencode-go/glm-flash",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Glm Flash (alias)",
         providerID: "opencode-go",
@@ -841,7 +920,7 @@ describe("buildInspectRows structured public primitives", () => {
       },
       {
         key: "opencode-go/qwen-flash",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Qwen Flash (alias)",
         providerID: "opencode-go",
@@ -862,7 +941,7 @@ describe("buildInspectRows structured public primitives", () => {
       provider: "openai",
       displayName: "Gpt Terra (alias)",
       alias: "gpt-terra",
-      strategy: "latest",
+      strategy: ["latest"],
       status: "active",
       target: "gpt-4o-2024-11-20",
       catalogID: "gpt-4o-2024-11-20",
@@ -883,7 +962,7 @@ describe("buildInspectRows structured public primitives", () => {
       expect(typeof r.provider).toBe("string");
       expect(typeof r.displayName).toBe("string");
       expect(typeof r.alias).toBe("string");
-      expect(r.strategy).toBe("latest");
+      expect(r.strategy).toEqual(["latest"]);
       expect(r.status).toBe("active");
     }
   });
@@ -892,7 +971,7 @@ describe("buildInspectRows structured public primitives", () => {
     const rows: AliasReportRow[] = [
       {
         key: "anthropic/pick",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Pick (alias)",
         providerID: "anthropic",
@@ -909,7 +988,7 @@ describe("buildInspectRows structured public primitives", () => {
     const rows: AliasReportRow[] = [
       {
         key: "openai/void",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "unresolved",
         displayName: "Void (alias)",
         failureKind: "no-eligible",
@@ -927,7 +1006,7 @@ describe("buildInspectRows structured public primitives", () => {
     const rows: AliasReportRow[] = [
       {
         key: "anthropic/bad",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "Bad\u001b[31m",
         providerID: "anthropic",
@@ -946,7 +1025,7 @@ describe("buildInspectRows structured public primitives", () => {
     const rows: AliasReportRow[] = [
       {
         key: newlineKey,
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "A (alias)",
         providerID: "provider",
@@ -954,7 +1033,7 @@ describe("buildInspectRows structured public primitives", () => {
       },
       {
         key: literalKey,
-        strategy: "latest",
+        strategy: ["latest"],
         status: "resolved",
         displayName: "A (alias)",
         providerID: "provider",

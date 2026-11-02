@@ -181,13 +181,27 @@ describe("field constraints", () => {
     expectInvalid(alias("a/m", { match: "a/**", filter: { minAge: 48 } }), "must be string");
   });
 
-  it("select, when present, is exactly { strategy: 'latest' }", () => {
+  it("select.strategy is a supported criterion or a non-empty array of them (duplicates rejected at runtime)", () => {
+    expectValid(alias("a/m", { match: "a/**", select: { strategy: "latest" } }));
+    expectValid(alias("a/m", { match: "a/**", select: { strategy: "best" } }));
+    expectValid(alias("a/m", { match: "a/**", select: { strategy: "cheapest" } }));
+    expectValid(
+      alias("a/m", { match: "a/**", select: { strategy: ["best", "cheapest", "latest"] } }),
+    );
     expectInvalid(
       alias("a/m", { match: "a/**", select: {} }),
       "must have required property 'strategy'",
     );
     expectInvalid(
       alias("a/m", { match: "a/**", select: { strategy: "oldest" } }),
+      "must be equal to one of the allowed values",
+    );
+    expectInvalid(
+      alias("a/m", { match: "a/**", select: { strategy: [] } }),
+      "must NOT have fewer than 1 items",
+    );
+    expectInvalid(
+      alias("a/m", { match: "a/**", select: { strategy: ["latest", "oldest"] } }),
       "must be equal to one of the allowed values",
     );
   });
@@ -245,7 +259,7 @@ const validWithoutMetadata: unknown[] = [
       capabilities: { tools: true, input: ["text"] },
       minContext: 32_000,
     },
-    select: { strategy: "latest" },
+    select: { strategy: ["best", "cheapest", "latest"] },
     name: "Float",
   }),
   { aliases: {}, strict: true, debug: false },
@@ -271,6 +285,8 @@ const invalidDocs: unknown[] = [
   alias("a/m", { match: "a/**", filter: { minAge: 48 } }),
   alias("a/m", { match: "a/**", select: {} }),
   alias("a/m", { match: "a/**", select: { strategy: "oldest" } }),
+  alias("a/m", { match: "a/**", select: { strategy: [] } }),
+  alias("a/m", { match: "a/**", select: { strategy: ["latest", "oldest"] } }),
   alias("a/m", { match: "a/**", name: "" }),
   alias("no-slash", { match: "a/**" }),
   alias("prov*ider/m", { match: "a/**" }),
@@ -324,6 +340,17 @@ describe("runtime parity with normalizeOptions", () => {
   it("semantic-only: provider equality between match and alias key is left to the runtime", () => {
     // Schema-valid shape; normalizeOptions rejects the provider mismatch.
     const doc = alias("anthropic/float", { match: "openai/gpt-*" });
+    expect(errorsOf(doc)).toBeUndefined();
+    expect(normalizeOptions(doc as never).ok).toBe(false);
+  });
+
+  it("intentional divergence: duplicate criteria are schema-valid and rejected at runtime", () => {
+    // uniqueItems is intentionally absent (see schema contract): the runtime
+    // decides the ordered-policy semantics.
+    const doc = alias("anthropic/float", {
+      match: "anthropic/**",
+      select: { strategy: ["best", "best"] },
+    });
     expect(errorsOf(doc)).toBeUndefined();
     expect(normalizeOptions(doc as never).ok).toBe(false);
   });

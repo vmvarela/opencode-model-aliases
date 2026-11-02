@@ -90,7 +90,7 @@ const SAMPLE_ROW_ACTIVE: InspectResponseRow = {
   displayName: "Sonnet (alias)",
   provider: "github-copilot",
   alias: "sonnet",
-  strategy: "latest",
+  strategy: ["latest"],
   status: "active",
   target: "claude-3-5-sonnet-20241022",
   catalogID: "claude-3-5-sonnet-20241022",
@@ -104,7 +104,7 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
     displayName: "Gemini Flash (alias)",
     provider: "github-copilot",
     alias: "gemini-flash",
-    strategy: "latest",
+    strategy: ["latest"],
     status: "active",
     target: "gemini-2.5-flash",
     catalogID: "gemini-2.5-flash",
@@ -115,7 +115,7 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
     displayName: "Sonnet (alias)",
     provider: "github-copilot",
     alias: "sonnet",
-    strategy: "latest",
+    strategy: ["latest"],
     status: "active",
     target: "claude-3-5-sonnet-20241022",
     catalogID: "claude-3-5-sonnet-20241022",
@@ -127,7 +127,7 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
     displayName: "Custom GPT Luna",
     provider: "openai",
     alias: "gpt-luna",
-    strategy: "latest",
+    strategy: ["cheapest", "best", "latest"],
     status: "active",
     target: "gpt-4o-mini-2024-07-18",
     catalogID: "gpt-4o-mini-2024-07-18",
@@ -138,7 +138,7 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
     displayName: "gpt-sol",
     provider: "openai",
     alias: "gpt-sol",
-    strategy: "latest",
+    strategy: ["best", "latest"],
     status: "active",
     target: "o1-preview",
     catalogID: "o1-preview",
@@ -149,7 +149,7 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
     displayName: "GPT Terra (alias)",
     provider: "openai",
     alias: "gpt-terra",
-    strategy: "latest",
+    strategy: ["latest"],
     status: "active",
     target: "gpt-4o-2024-11-20",
     catalogID: "gpt-4o-2024-11-20",
@@ -160,7 +160,7 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
     displayName: "DeepSeek Flash (alias)",
     provider: "opencode-go",
     alias: "deepseek-flash",
-    strategy: "latest",
+    strategy: ["cheapest", "latest"],
     status: "active",
     target: "deepseek-v3-flash",
     catalogID: "deepseek-v3-flash",
@@ -171,7 +171,7 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
     displayName: "GLM Flash (alias)",
     provider: "opencode-go",
     alias: "glm-flash",
-    strategy: "latest",
+    strategy: ["latest"],
     status: "inactive",
     target: "glm-4-flash",
     catalogID: "glm-4-flash",
@@ -182,7 +182,7 @@ const SAMPLE_ACTUAL8_ROWS: InspectResponseRow[] = [
     displayName: "Qwen Flash (alias)",
     provider: "opencode-go",
     alias: "qwen-flash",
-    strategy: "latest",
+    strategy: ["cheapest", "best", "latest"],
     status: "unresolved",
     failureKind: "no-eligible",
     failureReason: "no candidate matched pattern",
@@ -635,6 +635,7 @@ describe("TUI dialog navigation: select list and detail view", () => {
     expect(alert?.message).toContain("Alias: opencode-go/qwen-flash");
     expect(alert?.message).toContain("Name: Qwen Flash (alias)");
     expect(alert?.message).toContain("Alias model ID: qwen-flash");
+    expect(alert?.message).toContain("Strategy: cheapest > best > latest");
     expect(alert?.message).toContain("Status: unresolved (no-eligible)");
     expect(alert?.message).toContain("Reason: no candidate matched pattern");
   });
@@ -659,6 +660,7 @@ describe("TUI dialog navigation: select list and detail view", () => {
     expect(alert?.message).toContain("Name: Custom GPT Luna");
     expect(alert?.message).toContain("Alias model ID: gpt-luna");
     expect(alert?.message).toContain("Target: openai/gpt-4o-mini-2024-07-18");
+    expect(alert?.message).toContain("Strategy: cheapest > best > latest");
   });
 
   it("omite la línea Alias model ID cuando displayName coincide con el alias model ID", async () => {
@@ -679,6 +681,7 @@ describe("TUI dialog navigation: select list and detail view", () => {
     expect(alert?.title).toBe("Model aliases: gpt-sol");
     expect(alert?.message).toContain("Alias: openai/gpt-sol");
     expect(alert?.message).toContain("Name: gpt-sol");
+    expect(alert?.message).toContain("Strategy: best > latest");
     expect(alert?.message).not.toContain("Alias model ID");
   });
 
@@ -693,7 +696,7 @@ describe("TUI dialog navigation: select list and detail view", () => {
         displayName: "A (alias)",
         provider: "provider",
         alias: "a\\u000a",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "active",
         target: "target-newline",
         catalogID: "target-newline",
@@ -704,7 +707,7 @@ describe("TUI dialog navigation: select list and detail view", () => {
         displayName: "A (alias)",
         provider: "provider",
         alias: "a\\u000a",
-        strategy: "latest",
+        strategy: ["latest"],
         status: "active",
         target: "target-literal",
         catalogID: "target-literal",
@@ -740,7 +743,7 @@ describe("TUI dialog navigation: select list and detail view", () => {
             displayName: "Ultra Smart Model 5.0",
             provider: "provider-x",
             alias: "custom-slug",
-            strategy: "latest",
+            strategy: ["latest"],
             status: "active",
             target: "underlying-model-v5",
           },
@@ -893,7 +896,7 @@ describe("TUI security, validation, and error boundaries", () => {
             identity: "github-copilot/sonnet",
             provider: "github-copilot",
             alias: "sonnet",
-            strategy: "latest",
+            strategy: ["latest"],
             status: "active",
           },
         ],
@@ -907,7 +910,7 @@ describe("TUI security, validation, and error boundaries", () => {
             identity: "github-copilot/sonnet",
             provider: "github-copilot",
             alias: "sonnet",
-            strategy: "latest",
+            strategy: ["latest"],
             status: "active",
           },
         ],
@@ -921,7 +924,35 @@ describe("TUI security, validation, and error boundaries", () => {
             displayName: "Sonnet (alias)",
             provider: "github-copilot",
             alias: "sonnet",
-            strategy: "latest",
+            strategy: ["latest"],
+            status: "active",
+          },
+        ],
+      },
+      {
+        text: "ok",
+        rows: [
+          {
+            key: "github-copilot/sonnet",
+            displayName: "Sonnet (alias)",
+            identity: "github-copilot/sonnet",
+            provider: "github-copilot",
+            alias: "sonnet",
+            strategy: [],
+            status: "active",
+          },
+        ],
+      },
+      {
+        text: "ok",
+        rows: [
+          {
+            key: "github-copilot/sonnet",
+            displayName: "Sonnet (alias)",
+            identity: "github-copilot/sonnet",
+            provider: "github-copilot",
+            alias: "sonnet",
+            strategy: ["cheapest", "unknown"],
             status: "active",
           },
         ],
@@ -973,7 +1004,7 @@ describe("TUI security, validation, and error boundaries", () => {
             identity: "github-copilot/sonnet",
             provider: "github-copilot",
             alias: "sonnet",
-            strategy: "latest",
+            strategy: ["latest"],
             status: "active",
           },
         ],
@@ -990,7 +1021,7 @@ describe("TUI security, validation, and error boundaries", () => {
             identity: "github-copilot/sonnet",
             provider: "github-copilot",
             alias: "sonnet",
-            strategy: "latest",
+            strategy: ["latest"],
             status: "active",
           },
         ],
@@ -1007,12 +1038,44 @@ describe("TUI security, validation, and error boundaries", () => {
             identity: "github-copilot/sonnet",
             provider: "github-copilot",
             alias: "sonnet",
-            strategy: "latest",
+            strategy: ["latest"],
             status: "active",
           },
         ],
       }),
     ).toBe(true);
+  });
+
+  it("isInspectResponse validates ordered strategy arrays and rejects empty or unknown criteria (#46)", () => {
+    for (const invalidStrategy of [
+      "latest",
+      [],
+      ["unknown"],
+      ["cheapest", "fastest"],
+      ["best", 123],
+      null,
+    ]) {
+      expect(
+        isInspectResponse({
+          text: "ok",
+          rows: [{ ...SAMPLE_ROW_ACTIVE, strategy: invalidStrategy }],
+        }),
+      ).toBe(false);
+    }
+
+    for (const validStrategy of [
+      ["latest"],
+      ["best", "latest"],
+      ["cheapest", "latest"],
+      ["cheapest", "best", "latest"],
+    ]) {
+      expect(
+        isInspectResponse({
+          text: "ok",
+          rows: [{ ...SAMPLE_ROW_ACTIVE, strategy: validStrategy }],
+        }),
+      ).toBe(true);
+    }
   });
 
   it("isInspectResponse rejects rows with duplicate identities", () => {
@@ -1037,7 +1100,7 @@ describe("TUI security, validation, and error boundaries", () => {
       displayName: "Claude Sonnet (alias)",
       provider: "anthropic",
       alias: "my-alias",
-      strategy: "latest",
+      strategy: ["cheapest", "best", "latest"],
       status: "active",
       target: "claude-3-7-sonnet",
     };
@@ -1045,6 +1108,7 @@ describe("TUI security, validation, and error boundaries", () => {
     expect(formattedDifferent).toContain("Alias: anthropic/my-alias");
     expect(formattedDifferent).toContain("Name: Claude Sonnet (alias)");
     expect(formattedDifferent).toContain("Alias model ID: my-alias");
+    expect(formattedDifferent).toContain("Strategy: cheapest > best > latest");
 
     const withMatchingName: InspectResponseRow = {
       identity: "anthropic/my-alias",
@@ -1052,13 +1116,14 @@ describe("TUI security, validation, and error boundaries", () => {
       displayName: "my-alias",
       provider: "anthropic",
       alias: "my-alias",
-      strategy: "latest",
+      strategy: ["latest"],
       status: "active",
       target: "claude-3-7-sonnet",
     };
     const formattedMatching = formatDetailMessage(withMatchingName);
     expect(formattedMatching).toContain("Alias: anthropic/my-alias");
     expect(formattedMatching).toContain("Name: my-alias");
+    expect(formattedMatching).toContain("Strategy: latest");
     expect(formattedMatching).not.toContain("Alias model ID");
   });
 });
@@ -1223,7 +1288,7 @@ describe("TUI change notifications", () => {
       displayName: "A (alias)",
       provider: "provider",
       alias: "a\\u000a",
-      strategy: "latest" as const,
+      strategy: ["latest"] as const,
       status: "active" as const,
       target,
       catalogID: target,
@@ -1419,7 +1484,7 @@ describe("TUI explain action", () => {
       status: "active",
       explanation: {
         alias: "p/alias",
-        strategy: "latest",
+        strategy: ["latest"],
         unmatched: 3,
         stages: [
           { name: "matching", accepted: 2 },
@@ -1501,7 +1566,7 @@ describe("TUI explain action", () => {
       status: "active",
       explanation: {
         alias: "opencode/zen-plan",
-        strategy: "latest",
+        strategy: ["latest"],
         unmatched: 3,
         stages: [
           { name: "matching", accepted: 9 },
@@ -1609,7 +1674,7 @@ describe("TUI explain action", () => {
       status: "active",
       explanation: {
         alias: "p/alias",
-        strategy: "latest",
+        strategy: ["latest"],
         unmatched: 3,
         stages: [
           { name: "matching", accepted: 1 },
@@ -1657,7 +1722,7 @@ describe("TUI explain action", () => {
       status: "active",
       explanation: {
         alias: "p/alias",
-        strategy: "latest",
+        strategy: ["latest"],
         unmatched: 1,
         stages: [
           { name: "matching", accepted: 2 },
@@ -1743,7 +1808,7 @@ describe("TUI explain action", () => {
       status: "active",
       explanation: {
         alias: "p/alias",
-        strategy: "latest",
+        strategy: ["latest"],
         unmatched: 0,
         stages: [
           { name: "matching", accepted: 2 },
@@ -1801,7 +1866,7 @@ describe("TUI explain action", () => {
       status: "active",
       explanation: {
         alias: "p/alias",
-        strategy: "latest",
+        strategy: ["latest"],
         unmatched: 0,
         stages: [
           { name: "matching", accepted: 2 },
@@ -1852,7 +1917,7 @@ describe("TUI explain action", () => {
       status: "active",
       explanation: {
         alias: "p/alias",
-        strategy: "latest",
+        strategy: ["latest"],
         unmatched: 0,
         stages: [{ name: "matching", accepted: 1 }],
         winner: "p/m1",
@@ -1884,7 +1949,7 @@ describe("TUI explain action", () => {
       status: "unresolved",
       explanation: {
         alias: "p/alias",
-        strategy: "latest",
+        strategy: ["latest"],
         unmatched: 0,
         stages: [{ name: "matching", accepted: 0 }],
         failure: { stage: "matching", code: "no-candidates", message: "no candidate matched" },

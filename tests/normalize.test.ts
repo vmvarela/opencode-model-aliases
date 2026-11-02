@@ -453,20 +453,45 @@ describe("normalizeOptions", () => {
     }
   });
 
-  it("select por alias: omitido equivale a latest; exige objeto con strategy exacto", () => {
-    const ok = normalize(
-      optionsWith({
-        "anthropic/a": { match: "anthropic/**", select: { strategy: "latest" } },
-        "anthropic/b": { match: "anthropic/**" },
-      }),
-    );
-    expect(ok.ok).toBe(true);
+  it("select.strategy: omitido equivale a latest; escalar, lista explícita y valores inválidos", () => {
+    const strategyOf = (select: unknown) => {
+      const r = normalize(optionsWith({ "anthropic/a": { match: "anthropic/**", select } }));
+      return r.ok ? r.config.aliases[0]?.strategy : r.failure.kind;
+    };
 
+    // Omitted select means ["latest"]; scalar keeps the deterministic fallback.
+    const omitted = normalize(optionsWith({ "anthropic/a": { match: "anthropic/**" } }));
+    expect(omitted.ok).toBe(true);
+    if (omitted.ok) expect(omitted.config.aliases[0]?.strategy).toEqual(["latest"]);
+    expect(strategyOf({ strategy: "latest" })).toEqual(["latest"]);
+    expect(strategyOf({ strategy: "best" })).toEqual(["best", "latest"]);
+    expect(strategyOf({ strategy: "cheapest" })).toEqual(["cheapest", "latest"]);
+    // Explicit arrays are preserved exactly, in the given order.
+    expect(strategyOf({ strategy: ["best", "cheapest", "latest"] })).toEqual([
+      "best",
+      "cheapest",
+      "latest",
+    ]);
+    expect(strategyOf({ strategy: ["cheapest", "latest", "best"] })).toEqual([
+      "cheapest",
+      "latest",
+      "best",
+    ]);
+
+    // Unknown criteria, malformed values, empty arrays and duplicates fail.
     const bad: unknown[] = [
       "latest",
-      {},
-      { strategy: "cheapest" },
+      { strategy: "oldest" },
+      { strategy: "" },
+      { strategy: ["latest", "latest"] },
+      { strategy: ["latest", "best", "latest"] },
+      { strategy: ["nowrap"] },
+      { strategy: [] },
+      { strategy: [3] },
+      { strategy: [null] },
+      { strategy: ["latest", "oldest", "best"] },
       { strategy: "latest", tiebreak: "id" },
+      {},
       3,
       null,
     ];
@@ -475,6 +500,21 @@ describe("normalizeOptions", () => {
       expect(r.ok).toBe(false);
       if (!r.ok) expect(r.failure.kind).toBe("parse-error");
     }
+    // The failure reason names the specific problem.
+    const duplicate = normalize(
+      optionsWith({
+        "anthropic/a": { match: "anthropic/**", select: { strategy: ["best", "best"] } },
+      }),
+    );
+    expect(duplicate.ok).toBe(false);
+    if (!duplicate.ok) expect(duplicate.failure.reason).toContain("duplicated");
+    const unknown = normalize(
+      optionsWith({
+        "anthropic/a": { match: "anthropic/**", select: { strategy: ["cheapest", "oldest"] } },
+      }),
+    );
+    expect(unknown.ok).toBe(false);
+    if (!unknown.ok) expect(unknown.failure.reason).toContain("oldest");
   });
 
   it("rechaza claves raíz desconocidas y nombra la errata", () => {

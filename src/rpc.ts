@@ -2,6 +2,11 @@ import type { Rpc } from "@opencode/plugin";
 
 const stageSchema = { type: "string", enum: ["matching", "filtering", "selection"] } as const;
 const reasonProperties = { code: { type: "string" }, message: { type: "string" } } as const;
+const strategySchema = {
+  type: "array",
+  minItems: 1,
+  items: { type: "string", enum: ["latest", "best", "cheapest"] },
+} as const;
 
 /**
  * Public RPC contract of the plugin, consumed by the TUI (which imports only
@@ -40,7 +45,7 @@ export const ModelAliasesRpc = {
             type: "object",
             properties: {
               alias: { type: "string" },
-              strategy: { type: "string", enum: ["latest"] },
+              strategy: strategySchema,
               unmatched: { type: "integer", minimum: 0 },
               winner: { type: "string" },
               stages: {
@@ -107,7 +112,7 @@ export const ModelAliasesRpc = {
                 provider: { type: "string" },
                 displayName: { type: "string" },
                 alias: { type: "string" },
-                strategy: { type: "string", enum: ["latest"] },
+                strategy: strategySchema,
                 status: { type: "string", enum: ["active", "inactive", "unresolved"] },
                 target: { type: "string" },
                 catalogID: { type: "string" },

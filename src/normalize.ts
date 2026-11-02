@@ -7,6 +7,7 @@ import {
   type NormalizedAlias,
   type NormalizedConfig,
   type Options,
+  type SelectionStrategy,
 } from "./config.js";
 import { failure, type ResolveFailure } from "./errors.js";
 
@@ -249,16 +250,35 @@ function normalizeMinAge(value: unknown, context: string): number | undefined | 
   return ms;
 }
 
-function normalizeSelect(value: unknown, context: string): { strategy: "latest" } | ResolveFailure {
-  if (value === undefined) return { strategy: "latest" };
+const SELECTION_STRATEGIES: ReadonlySet<string> = new Set(["latest", "best", "cheapest"]);
+
+/**
+ * Scalar `select.strategy` normalization: each single criterion keeps its
+ * deterministic "latest" fallback specified by the individual selector
+ * issues, without baking it into the criterion implementations.
+ */
+const SCALAR_SELECTION: ReadonlyMap<string, readonly SelectionStrategy[]> = new Map([
+  ["latest", ["latest"]],
+  ["best", ["best", "latest"]],
+  ["cheapest", ["cheapest", "latest"]],
+]);
+
+/**
+ * Ordered selection policy: a scalar criterion normalizes to its fallback
+ * list, an explicit non-empty array is preserved exactly (order matters for
+ * the lexicographic ranking). Empty arrays, duplicates and unknown criteria
+ * are rejected.
+ */
+function normalizeSelect(
+  value: unknown,
+  context: string,
+): { strategy: readonly SelectionStrategy[] } | ResolveFailure {
+  if (value === undefined) return { strategy: ["latest"] };
   if (!isPlainObject(value)) {
     return failure(
       "parse-error",
       `${context}: select must be an object like { strategy: "latest" }`,
     );
-  }
-  if (value.strategy !== "latest") {
-    return failure("parse-error", `${context}: select.strategy must be "latest"`);
   }
   const extra = unknownKeys(value, ["strategy"]);
   if (extra.length > 0) {
@@ -267,9 +287,42 @@ function normalizeSelect(value: unknown, context: string): { strategy: "latest" 
       `${context}: select ${unsupportedKeysMessage(extra, ["strategy"])}`,
     );
   }
-  return { strategy: "latest" };
+  const raw = value.strategy;
+  if (typeof raw === "string") {
+    const scalar = SCALAR_SELECTION.get(raw);
+    if (!scalar) {
+      return failure(
+        "parse-error",
+        `${context}: select.strategy must be one of "latest", "best" or "cheapest"`,
+      );
+    }
+    return { strategy: scalar };
+  }
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return failure(
+      "parse-error",
+      `${context}: select.strategy must be one of "latest", "best" or "cheapest", or a non-empty array of them`,
+    );
+  }
+  const policy: SelectionStrategy[] = [];
+  for (const rawEntry of raw) {
+    if (typeof rawEntry !== "string" || !SELECTION_STRATEGIES.has(rawEntry)) {
+      return failure(
+        "parse-error",
+        `${context}: select.strategy value ${JSON.stringify(rawEntry)} is not a supported selection criterion`,
+      );
+    }
+    const entry = rawEntry as SelectionStrategy;
+    if (policy.includes(entry)) {
+      return failure(
+        "parse-error",
+        `${context}: select.strategy value ${JSON.stringify(entry)} is duplicated`,
+      );
+    }
+    policy.push(entry);
+  }
+  return { strategy: policy };
 }
-
 function normalizeAlias(key: string, value: unknown): NormalizedAlias | ResolveFailure {
   const context = `alias "${key}"`;
   if (key.includes("#")) {
@@ -344,6 +397,7 @@ function normalizeAlias(key: string, value: unknown): NormalizedAlias | ResolveF
     ...(capabilities ? { capabilities } : {}),
     ...(minContext !== undefined ? { minContext } : {}),
     ...(minAge !== undefined ? { minAgeMs: minAge } : {}),
+    strategy: select.strategy,
     name: name === undefined ? key : name,
     nameExplicit: name !== undefined,
   };

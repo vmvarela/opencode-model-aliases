@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import floatingModels from "../src/index.js";
 import { makeTempRoot, removeTempRoot, writeConfigFile } from "./config-fs.js";
@@ -1192,6 +1193,106 @@ describe("reload RPC", () => {
     expect(await reloadHandler(harness)({}, {})).toEqual({ status: "reloaded" });
     expect(harness.view().get("anthropic/pick")?.modelID).toBe("claude-b");
     expect(await harness.inspect()).toContain("Pick (alias) (pick)\n    → claude-b");
+    await stop?.();
+  });
+});
+
+describe("ordered selection policies end to end", () => {
+  const reloadHandler = (harness: ReturnType<typeof createHarness>) => {
+    const reload = harness.rpc.handlers[0]?.reload;
+    if (!reload) throw new Error("missing reload handler");
+    return reload;
+  };
+
+  /** The history storage key the plugin derives for the harness directory. */
+  const historyKey = () =>
+    `history-v1/${createHash("sha256")
+      .update(JSON.stringify([tempRoot, ""]))
+      .digest("hex")}`;
+  it("a duplicate or unknown criterion rejects the whole configuration at setup", async () => {
+    for (const strategy of [["best", "best"], ["oldest"], []]) {
+      const harness = createHarness({
+        sources: DEFAULT_SOURCES(),
+        options: {
+          aliases: {
+            "github-copilot/sonnet": { match: "github-copilot/**", select: { strategy } },
+          },
+        },
+      });
+      await expect(floatingModels.setup(harness.ctx)).rejects.toThrow(/invalid configuration/);
+      expect(harness.callbacks).toHaveLength(0);
+    }
+  });
+
+  it("a multi-criteria alias without criterion signals stays unresolved and shows the ordered policy", async () => {
+    const harness = createHarness({
+      sources: DEFAULT_SOURCES(),
+      options: {
+        aliases: {
+          "github-copilot/sonnet": {
+            match: "github-copilot/**",
+            select: { strategy: "cheapest" },
+          },
+        },
+      },
+    });
+    const stop = await floatingModels.setup(harness.ctx);
+    // Tolerant: unresolved, nothing materialized, warning explains the criterion.
+    expect(harness.view().get("github-copilot/sonnet")).toBeUndefined();
+    const unresolved = warnings.filter((w) => w.includes("unresolved"));
+    expect(unresolved.length).toBeGreaterThan(0);
+    expect(unresolved.at(-1)).toContain("missing-metadata");
+    expect(unresolved.at(-1)).toContain("comparison cost");
+    const text = await harness.inspect();
+    expect(text).toContain("Model aliases (strategies: cheapest > latest)");
+    expect(text).toContain(
+      "→ unresolved (missing-metadata): no eligible candidate has usable comparison cost " +
+        "(cheapest) metadata (strategy: cheapest > latest)",
+    );
+    // best and cheapest criteria are never invented from pricing metadata.
+    expect(text).not.toContain("3.15");
+    await stop?.();
+  });
+
+  it("a strategy-only change resets the alias baseline on reload; other policy changes keep it", async () => {
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({ aliases: { "github-copilot/sonnet": { match: "github-copilot/**" } } }),
+    );
+    const harness = createHarness({ sources: DEFAULT_SOURCES(), options: {} });
+    const stop = await floatingModels.setup(harness.ctx);
+    expect(harness.view().get("github-copilot/sonnet")?.modelID).toBe("sonnet-4-exec");
+    const readHistory = () =>
+      harness.storage.get(historyKey()) as { aliases: Array<Record<string, unknown>> } | undefined;
+    const entry = readHistory()?.aliases[0];
+    expect(entry?.strategy).toEqual(["latest"]);
+    expect(entry?.target).toMatchObject({ catalogID: "sonnet-4" });
+
+    // A different non-strategy policy change (rename) keeps the baseline.
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({
+        aliases: { "github-copilot/sonnet": { match: "github-copilot/**", name: "Renamed" } },
+      }),
+    );
+    expect(await reloadHandler(harness)({}, {})).toEqual({ status: "reloaded" });
+    const afterRename = readHistory()?.aliases[0];
+    expect(afterRename?.target).toEqual(entry?.target);
+
+    // The strategy change alone drops the baseline: the alias cannot resolve
+    // without cost signals anyway, and the next read persists the cleared
+    // state.
+    writeConfigFile(
+      tempRoot,
+      JSON.stringify({
+        aliases: {
+          "github-copilot/sonnet": { match: "github-copilot/**", select: { strategy: "best" } },
+        },
+      }),
+    );
+    expect(await reloadHandler(harness)({}, {})).toEqual({ status: "reloaded" });
+    expect((readHistory() as { aliases: unknown[] } | undefined)?.aliases).toEqual([]);
+    expect(await harness.inspect()).toContain("(strategy: best > latest)");
     await stop?.();
   });
 });

@@ -1,4 +1,4 @@
-import type { Candidate, NormalizedAlias } from "./config.js";
+import type { Candidate, NormalizedAlias, SelectionStrategy } from "./config.js";
 import { failure, type ResolveFailure } from "./errors.js";
 import type { CandidateExplanation, ResolutionExplanation } from "./explain.js";
 import { sanitize } from "./report.js";
@@ -90,6 +90,73 @@ function minAgeLabel(ms: number): string {
 }
 
 /**
+ * Criterion signals injected by the host integration, keyed by canonical
+ * candidate id `<providerID>/<id>`. Values live outside Candidate so the
+ * resolver never invents quality or pricing data: a criterion whose signal
+ * has no usable value for a candidate excludes it from the current tied
+ * group, and if no candidate can provide a value the alias stays unresolved.
+ */
+export interface SelectionSignals {
+  /** Quality score; a higher value wins. */
+  readonly best?: ReadonlyMap<string, number>;
+  /** Comparison cost; a lower value wins. */
+  readonly cheapest?: ReadonlyMap<string, number>;
+}
+
+/** Loss verdict for the members defeated by one criterion's ordering. */
+const LOSS_REASON: Readonly<Record<SelectionStrategy, { code: string; message: string }>> = {
+  latest: { code: "older-release", message: "Older release than the selected candidate" },
+  best: { code: "lower-score", message: "Lower quality score than the selected candidate" },
+  cheapest: {
+    code: "higher-cost",
+    message: "Higher comparison cost than the selected candidate",
+  },
+};
+
+/** Exclusion verdict for the members without usable metadata for one criterion. */
+const MISSING_REASON: Readonly<Record<SelectionStrategy, { code: string; message: string }>> = {
+  latest: { code: "missing-metadata", message: "Missing or invalid time.released timestamp" },
+  best: {
+    code: "missing-metadata",
+    message: "Missing or invalid quality score (best) metadata",
+  },
+  cheapest: {
+    code: "missing-metadata",
+    message: "Missing or invalid comparison cost (cheapest) metadata",
+  },
+};
+
+/** Unresolved message when no member of a tied group has usable criterion data. */
+const MISSING_POLICY_MESSAGE: Readonly<Record<SelectionStrategy, string>> = {
+  latest: "no eligible candidate has a reliable time.released timestamp",
+  best: "no eligible candidate has usable quality score (best) metadata",
+  cheapest: "no eligible candidate has usable comparison cost (cheapest) metadata",
+};
+
+type CriterionValue = { readonly usable: boolean; readonly value: number };
+
+/**
+ * Usable values per criterion: release timestamps come from the candidate,
+ * quality scores and comparison costs from the injected signals keyed by
+ * canonical id. Only finite numbers are usable.
+ */
+function criterionValue(
+  strategy: SelectionStrategy,
+  candidate: Candidate,
+  signals: SelectionSignals | undefined,
+): CriterionValue {
+  if (strategy === "latest") {
+    const released = releasedMs(candidate);
+    return released > 0 ? { usable: true, value: released } : { usable: false, value: 0 };
+  }
+  const map = strategy === "best" ? signals?.best : signals?.cheapest;
+  const value = map?.get(canonical(candidate));
+  return typeof value === "number" && Number.isFinite(value)
+    ? { usable: true, value }
+    : { usable: false, value: 0 };
+}
+
+/**
  * Pure selection from the provided source list. No side effects and no
  * mutation of the input; the resolver never adds models derived from aliases
  * outside the explicit list.
@@ -98,11 +165,12 @@ export function resolveLatest<T extends Candidate>(
   models: readonly T[],
   alias: NormalizedAlias,
   now: number = Date.now(),
+  signals?: SelectionSignals,
 ): ResolveResult<T> & { explanation: ResolutionExplanation } {
   const stages: Stage[] = [];
   const explanation: ResolutionExplanation = {
     alias: sanitize(alias.key),
-    strategy: "latest",
+    strategy: alias.strategy,
     stages,
     unmatched: 0,
     candidates: [],
@@ -202,78 +270,134 @@ export function resolveLatest<T extends Candidate>(
     );
   }
 
-  const known = eligible.filter(({ candidate, detail }) => {
+  const known = eligible.map(({ candidate, detail }) => {
     detail.stage = "selection";
-    const released = releasedMs(candidate);
-    if (released === 0) {
+    return { candidate, detail };
+  });
+  // `minAge` is a prefilter, independent of the ranking: it runs before the
+  // criteria and only on ages that can be evaluated, threshold inclusive
+  // (now - released >= ms). Candidates without a reliable timestamp cannot be
+  // aged and are dropped as missing metadata.
+  const minAgeMs = alias.minAgeMs;
+  let aged = known;
+  let tooYoung = false;
+  if (minAgeMs !== undefined) {
+    aged = known.filter(({ candidate, detail }) => {
+      const released = releasedMs(candidate);
+      if (released === 0) {
+        detail.reasons.push({
+          code: "missing-metadata",
+          message: "Missing or invalid time.released timestamp",
+        });
+        return false;
+      }
+      if (now - released >= minAgeMs) {
+        detail.released = released;
+        return true;
+      }
+      detail.released = released;
+      tooYoung = true;
       detail.reasons.push({
-        code: "missing-metadata",
-        message: "Missing or invalid time.released timestamp",
+        code: "min-age",
+        message: `Released too recently (requires minAge>=${minAgeLabel(minAgeMs)})`,
       });
       return false;
-    }
-    detail.released = released;
-    return true;
-  });
-  // Missing timestamps are already rejected above; `minAge` only applies to
-  // ages that can be evaluated, threshold inclusive (now - released >= ms).
-  const minAgeMs = alias.minAgeMs;
-  const aged =
-    minAgeMs === undefined
-      ? known
-      : known.filter(({ candidate, detail }) => {
-          const age = now - releasedMs(candidate);
-          if (age >= minAgeMs) return true;
-          detail.reasons.push({
-            code: "min-age",
-            message: `Released too recently (requires minAge>=${minAgeLabel(minAgeMs)})`,
-          });
-          return false;
-        });
-  if (known.length === 0 || aged.length === 0) {
-    // A selection count of 0 means no winner: every reliable timestamp was
-    // missing, or none of the dated candidates reached the minimum age.
+    });
+  }
+  if (aged.length === 0) {
+    // A selection count of 0 means no winner: no reliable timestamp, or none
+    // of the dated candidates reached the minimum age.
     stages.push({ name: "selection", accepted: 0 });
-    return known.length === 0
+    return tooYoung
       ? fail(
-          "selection",
-          "missing-metadata",
-          "no eligible candidate has a reliable time.released timestamp",
-        )
-      : fail(
           "selection",
           "no-eligible",
           `no eligible candidate has reached the minimum age (minAge>=${minAgeLabel(minAgeMs ?? 0)})`,
-        );
+        )
+      : fail("selection", "missing-metadata", MISSING_POLICY_MESSAGE.latest);
   }
+
+  // Lexicographic ranking by the ordered policy: each criterion narrows the
+  // current tied group to its winners, and a criterion with missing metadata
+  // only excludes those members from that group. A group reduced to one
+  // candidate ends the ranking; the remaining criteria are never required.
+  let group = aged;
+  for (const strategy of alias.strategy) {
+    const usable: Array<{ candidate: T; detail: CandidateExplanation; value: number }> = [];
+    for (const member of group) {
+      const value = criterionValue(strategy, member.candidate, signals);
+      if (!value.usable) {
+        member.detail.reasons.push({ ...MISSING_REASON[strategy] });
+        continue;
+      }
+      if (strategy === "latest") member.detail.released = value.value;
+      usable.push({ candidate: member.candidate, detail: member.detail, value: value.value });
+    }
+    if (usable.length === 0) {
+      stages.push({ name: "selection", accepted: 0 });
+      return fail("selection", "missing-metadata", MISSING_POLICY_MESSAGE[strategy]);
+    }
+    // Descending for latest/best (higher/newer wins), ascending for cheapest
+    // (lower cost wins); equality keeps the criterion's tied peers together.
+    const extreme =
+      strategy === "cheapest"
+        ? Math.min(...usable.map(({ value }) => value))
+        : Math.max(...usable.map(({ value }) => value));
+    const tied = usable.filter(({ value }) => value === extreme);
+    if (tied.length < usable.length) {
+      const winners = new Set(tied);
+      for (const member of usable) {
+        if (!winners.has(member)) {
+          // Ranked but defeated by this criterion's ordering: still eligible.
+          member.detail.outcome = "eligible";
+          member.detail.reasons.push({ ...LOSS_REASON[strategy] });
+        }
+      }
+    }
+    group = tied;
+    if (group.length === 1) break;
+  }
+  // One winner (plus its tied peers) survived every criterion it needed.
   stages.push({ name: "selection", accepted: 1 });
-  const sorted = [...aged].sort(({ candidate: a }, { candidate: b }) => {
-    const delta = releasedMs(b) - releasedMs(a);
-    if (delta !== 0) return delta;
-    return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
-  });
-  const first = sorted[0];
-  if (!first) return fail("selection", "no-eligible", "selection produced no candidate");
-  const winner = first.candidate;
-  const second = sorted[1]?.candidate;
-  const tied = second !== undefined && releasedMs(second) === releasedMs(winner);
-  for (const { candidate, detail } of sorted) {
+
+  // Final deterministic tie-break: model ID descending over the criterion-tied
+  // group, always applied last and never skipped.
+  const legacyLatest = alias.strategy.length === 1 && alias.strategy[0] === "latest";
+  let winner: T;
+  let winReason: { code: string; message: string };
+  let loseReason: { code: string; message: string } | undefined;
+  if (group.length > 1) {
+    winner = group.reduce((a, b) => (b.candidate.id > a.candidate.id ? b : a)).candidate;
+    winReason = legacyLatest
+      ? { code: "id-tiebreak", message: "Newest release; won the descending model ID tie-break" }
+      : {
+          code: "id-tiebreak",
+          message: "Tied under the ordered policy; won the descending model ID tie-break",
+        };
+    loseReason = legacyLatest
+      ? {
+          code: "id-tiebreak",
+          message: "Same release timestamp; lost the descending model ID tie-break",
+        }
+      : {
+          code: "id-tiebreak",
+          message: "Tied under the ordered policy; lost the descending model ID tie-break",
+        };
+  } else {
+    const first = group[0];
+    if (!first) return fail("selection", "no-eligible", "selection produced no candidate");
+    winner = first.candidate;
+    winReason = legacyLatest
+      ? {
+          code: "newest-release",
+          message: "Newest eligible candidate with a reliable release timestamp",
+        }
+      : { code: "selected", message: `Won the ordered policy (${alias.strategy.join(" > ")})` };
+  }
+  for (const { candidate, detail } of group) {
     detail.outcome = candidate === winner ? "selected" : "eligible";
-    const tie = releasedMs(candidate) === releasedMs(winner);
     detail.reasons.push(
-      candidate === winner
-        ? {
-            code: tied ? "id-tiebreak" : "newest-release",
-            message: tied
-              ? "Newest release; won the descending model ID tie-break"
-              : "Newest eligible candidate with a reliable release timestamp",
-          }
-        : {
-            code: tie ? "id-tiebreak" : "older-release",
-            message: tie
-              ? "Same release timestamp; lost the descending model ID tie-break"
-              : "Older release than the selected candidate",
-          },
+      candidate === winner ? winReason : (loseReason as { code: string; message: string }),
     );
   }
   explanation.winner = sanitize(canonical(winner));

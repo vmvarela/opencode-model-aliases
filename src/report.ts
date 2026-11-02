@@ -1,4 +1,4 @@
-import type { Candidate, NormalizedAlias } from "./config.js";
+import type { Candidate, NormalizedAlias, SelectionStrategy } from "./config.js";
 import type { FailureKind } from "./errors.js";
 import { aliasDisplayName } from "./names.js";
 import type { ResolveResult } from "./resolve.js";
@@ -27,7 +27,8 @@ export interface InspectReportRow {
   /** Visible name: the configured name kept intact, or the default generated one. */
   readonly displayName: string;
   readonly alias: string;
-  readonly strategy: "latest";
+  /** Ordered selection policy in ranking order. */
+  readonly strategy: readonly SelectionStrategy[];
   readonly status: InspectRowStatus;
   readonly target?: string;
   readonly catalogID?: string;
@@ -45,8 +46,8 @@ export interface AliasReportRow {
   readonly transition?: AliasTransition;
   /** Alias reference `<provider>/<model>` (configuration key). */
   readonly key: string;
-  /** Only implemented strategy. */
-  readonly strategy: "latest";
+  /** Ordered selection policy in ranking order. */
+  readonly strategy: readonly SelectionStrategy[];
   readonly status: AliasReportStatus;
   /** Visible name: the configured name kept intact, or the default generated one. */
   readonly displayName: string;
@@ -90,7 +91,7 @@ export function buildRows<T extends Candidate & { readonly modelID?: string }>(
       const wire = result.model.modelID;
       return {
         key: alias.key,
-        strategy: "latest",
+        strategy: alias.strategy,
         status: "resolved",
         displayName,
         providerID: result.model.providerID,
@@ -101,7 +102,7 @@ export function buildRows<T extends Candidate & { readonly modelID?: string }>(
     }
     return {
       key: alias.key,
-      strategy: "latest",
+      strategy: alias.strategy,
       status: "unresolved",
       displayName,
       failureKind: result.failure.kind,
@@ -144,7 +145,7 @@ export function buildInspectRows(
         provider: safeProvider,
         displayName: safeDisplayName,
         alias: safeAlias,
-        strategy: "latest",
+        strategy: row.strategy,
         status: "unresolved",
         ...(row.failureKind ? { failureKind: sanitize(row.failureKind) } : {}),
         ...(row.failureReason ? { failureReason: sanitize(row.failureReason) } : {}),
@@ -172,7 +173,7 @@ export function buildInspectRows(
       provider: safeProvider,
       displayName: safeDisplayName,
       alias: safeAlias,
-      strategy: "latest",
+      strategy: row.strategy,
       status,
       ...(target !== undefined ? { target } : {}),
       ...(catalogID !== undefined ? { catalogID } : {}),
@@ -182,6 +183,16 @@ export function buildInspectRows(
   });
 }
 
+/** The display form of a row's ordered policy, e.g. "cheapest > best > latest". */
+function strategyLabel(row: AliasReportRow): string {
+  return row.strategy.join(" > ");
+}
+
+/** Plain ["latest"] keeps the legacy compact view; other policies are explicit. */
+function isPlainLatest(row: AliasReportRow): boolean {
+  return row.strategy.length === 1 && row.strategy[0] === "latest";
+}
+
 /**
  * Deterministic format: provider-grouped report with a compact summary.
  * Rows are grouped by the literal provider of the alias key and sorted by
@@ -189,7 +200,8 @@ export function buildInspectRows(
  * label, with the alias modelID in parentheses only when it differs, and its
  * target indented on the next line, without redundant prefixes or repetitive
  * labels; incidents (inactive or unresolved) and the execution wire modelID
- * (when it differs) are highlighted explicitly.
+ * (when it differs) are highlighted explicitly. Non-plain selection policies
+ * are shown beside the target.
  */
 export function formatReport(
   rows: ReadonlyArray<AliasReportRow>,
@@ -249,7 +261,8 @@ export function formatReport(
       if (row.status === "unresolved") {
         const kind = sanitize(row.failureKind ?? "unknown");
         const reason = row.failureReason ? `: ${sanitize(row.failureReason)}` : "";
-        return `  ${aliasLabel}\n    → unresolved (${kind})${reason}${formatTransition(row)}`;
+        const strategy = isPlainLatest(row) ? "" : ` (strategy: ${strategyLabel(row)})`;
+        return `  ${aliasLabel}\n    → unresolved (${kind})${reason}${strategy}${formatTransition(row)}`;
       }
 
       const target =
@@ -261,6 +274,9 @@ export function formatReport(
       if (row.wireModelID !== undefined && row.wireModelID !== row.catalogID) {
         targetLine += ` (wire model ID: ${sanitize(row.wireModelID)})`;
       }
+      if (!isPlainLatest(row)) {
+        targetLine += ` (strategy: ${strategyLabel(row)})`;
+      }
       if (!visible.has(row.key)) {
         targetLine += " (inactive: not in final catalog)";
       }
@@ -270,7 +286,14 @@ export function formatReport(
     return `${sanitize(provider)}\n${aliasBlocks.join("\n")}`;
   });
 
-  return `Model aliases (strategy: latest)\n${summary}\n\n${sections.join("\n\n")}`;
+  const policies = [...new Set(rows.map((row) => strategyLabel(row)))].sort((a, b) =>
+    a < b ? -1 : a > b ? 1 : 0,
+  );
+  const strategySummary =
+    policies.length === 1 && policies[0] === "latest"
+      ? "strategy: latest"
+      : `strategies: ${policies.join(", ")}`;
+  return `Model aliases (${strategySummary})\n${summary}\n\n${sections.join("\n\n")}`;
 }
 
 function formatTransition(row: AliasReportRow): string {
